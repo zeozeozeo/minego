@@ -1,0 +1,422 @@
+{
+  "_comment": "Wire format metadata for item components. Used by go generate to auto-generate codec registrations.",
+  "components": {
+    "minecraft:max_stack_size": {
+      "goField": "MaxStackSize",
+      "goType": "int32",
+      "wireType": "varint"
+    },
+    "minecraft:max_damage": {
+      "goField": "MaxDamage",
+      "goType": "int32",
+      "wireType": "varint"
+    },
+    "minecraft:damage": {
+      "goField": "Damage",
+      "goType": "int32",
+      "wireType": "varint"
+    },
+    "minecraft:repair_cost": {
+      "goField": "RepairCost",
+      "goType": "int32",
+      "wireType": "varint"
+    },
+    "minecraft:map_color": {
+      "goField": "MapColor",
+      "goType": "int32",
+      "wireType": "varint"
+    },
+    "minecraft:ominous_bottle_amplifier": {
+      "goField": "OminousBottleAmplifier",
+      "goType": "int32",
+      "wireType": "varint"
+    },
+    "minecraft:minimum_attack_charge": {
+      "goField": "MinimumAttackCharge",
+      "goType": "float64",
+      "wireType": "float32"
+    },
+    "minecraft:potion_duration_scale": {
+      "goField": "PotionDurationScale",
+      "goType": "float64",
+      "wireType": "float32"
+    },
+    "minecraft:additional_trade_cost": {
+      "goField": "AdditionalTradeCost",
+      "goType": "int32",
+      "wireType": "varint"
+    },
+    "minecraft:damage_type": {
+      "wireType": "varint",
+      "passthrough": true
+    },
+    "minecraft:item_model": {
+      "goField": "ItemModel",
+      "goType": "string",
+      "wireType": "identifier"
+    },
+    "minecraft:instrument": {
+      "goField": "Instrument",
+      "goType": "string",
+      "wireType": "identifier"
+    },
+    "minecraft:provides_trim_material": {
+      "wireType": "id_or_inline",
+      "passthrough": true
+    },
+    "minecraft:jukebox_playable": {
+      "goField": "JukeboxPlayable",
+      "goType": "string",
+      "wireType": "identifier"
+    },
+    "minecraft:provides_banner_patterns": {
+      "wireType": "holderSet",
+      "passthrough": true
+    },
+    "minecraft:break_sound": {
+      "goField": "BreakSound",
+      "goType": "string",
+      "wireType": "identifier"
+    },
+    "minecraft:unbreakable": {
+      "goField": "Unbreakable",
+      "goType": "bool",
+      "wireType": "empty"
+    },
+    "minecraft:glider": {
+      "goField": "Glider",
+      "goType": "bool",
+      "wireType": "empty"
+    },
+    "minecraft:rarity": {
+      "goField": "Rarity",
+      "goType": "string",
+      "wireType": "varintEnum",
+      "_comment": "Enum: 0=common, 1=uncommon, 2=rare, 3=epic"
+    },
+    "minecraft:food": {
+      "goField": "Food",
+      "goType": "*Food",
+      "wireType": "struct",
+      "wireFormat": [
+        {
+          "name": "nutrition",
+          "type": "varint",
+          "goField": "Nutrition"
+        },
+        {
+          "name": "saturation",
+          "type": "float32",
+          "goField": "Saturation"
+        }
+      ]
+    },
+    "minecraft:weapon": {
+      "goField": "Weapon",
+      "goType": "*Weapon",
+      "wireType": "struct",
+      "wireFormat": [
+        {
+          "name": "itemDamagePerAttack",
+          "type": "varint",
+          "goField": "ItemDamagePerAttack"
+        },
+        {
+          "name": "disableBlockingForSeconds",
+          "type": "float32",
+          "goField": "DisableBlockingForSeconds"
+        }
+      ]
+    },
+    "minecraft:enchantable": {
+      "goField": "Enchantable",
+      "goType": "*Enchantable",
+      "wireType": "struct",
+      "wireFormat": [
+        {
+          "name": "value",
+          "type": "varint",
+          "goField": "Value"
+        }
+      ]
+    },
+    "minecraft:custom_name": {
+      "goField": "CustomName",
+      "goType": "*ItemNameComponent",
+      "wireType": "nbtTextComponent"
+    },
+    "minecraft:item_name": {
+      "goField": "ItemName",
+      "goType": "*ItemNameComponent",
+      "wireType": "nbtTextComponent"
+    },
+    "minecraft:tooltip_display": {
+      "goField": "TooltipDisplay",
+      "goType": "*TooltipDisplay",
+      "wireType": "struct",
+      "wireFormat": [
+        {
+          "name": "hideTooltip",
+          "type": "bool",
+          "goField": "HideTooltip"
+        },
+        {
+          "name": "hiddenComponents",
+          "type": "varintArray",
+          "goField": "HiddenComponents"
+        }
+      ]
+    },
+    "minecraft:attribute_modifiers": {
+      "goField": "AttributeModifiers",
+      "goType": "[]AttributeModifier",
+      "wireType": "attributeModifierList"
+    },
+    "minecraft:use_cooldown": {
+      "goField": "UseCooldown",
+      "goType": "*UseCooldown",
+      "wireType": "struct",
+      "wireFormat": [
+        {
+          "name": "seconds",
+          "type": "float32",
+          "goField": "Seconds"
+        },
+        {
+          "name": "cooldownGroup",
+          "type": "optionalIdentifier"
+        }
+      ],
+      "_comment": "cooldownGroup not yet decoded into struct"
+    },
+    "minecraft:fireworks": {
+      "goField": "Fireworks",
+      "goType": "*Fireworks",
+      "wireType": "struct",
+      "wireFormat": [
+        {
+          "name": "flightDuration",
+          "type": "varint",
+          "goField": "FlightDuration"
+        },
+        {
+          "name": "explosions",
+          "type": "fireworkExplosionList"
+        }
+      ],
+      "_comment": "explosions not yet decoded into struct"
+    },
+    "minecraft:map_id": {
+      "wireType": "varint",
+      "passthrough": true
+    },
+    "minecraft:enchantment_glint_override": {
+      "wireType": "bool",
+      "passthrough": true
+    },
+    "minecraft:tooltip_style": {
+      "wireType": "identifier",
+      "passthrough": true
+    },
+    "minecraft:note_block_sound": {
+      "wireType": "identifier",
+      "passthrough": true
+    },
+    "minecraft:creative_slot_lock": {
+      "wireType": "empty",
+      "passthrough": true
+    },
+    "minecraft:intangible_projectile": {
+      "wireType": "empty",
+      "passthrough": true
+    },
+    "minecraft:dye": {
+      "wireType": "varint",
+      "passthrough": true
+    },
+    "minecraft:dyed_color": {
+      "wireType": "int32",
+      "passthrough": true
+    },
+    "minecraft:base_color": {
+      "wireType": "varint",
+      "passthrough": true
+    },
+    "minecraft:swing_animation": {
+      "wireType": "varint",
+      "passthrough": true
+    },
+    "minecraft:map_post_processing": {
+      "wireType": "varint",
+      "passthrough": true
+    },
+    "minecraft:custom_data": {
+      "wireType": "nbt",
+      "passthrough": true
+    },
+    "minecraft:debug_stick_state": {
+      "wireType": "nbt",
+      "passthrough": true
+    },
+    "minecraft:entity_data": {
+      "wireType": "nbt",
+      "passthrough": true
+    },
+    "minecraft:bucket_entity_data": {
+      "wireType": "nbt",
+      "passthrough": true
+    },
+    "minecraft:block_entity_data": {
+      "wireType": "nbt",
+      "passthrough": true
+    },
+    "minecraft:map_decorations": {
+      "wireType": "nbt",
+      "passthrough": true
+    },
+    "minecraft:lock": {
+      "wireType": "nbt",
+      "passthrough": true
+    },
+    "minecraft:container_loot": {
+      "wireType": "nbt",
+      "passthrough": true
+    },
+    "minecraft:damage_resistant": {
+      "wireType": "holderSet",
+      "passthrough": true
+    },
+    "minecraft:repairable": {
+      "wireType": "holderSet",
+      "passthrough": true
+    },
+    "minecraft:charged_projectiles": {
+      "wireType": "slotList",
+      "passthrough": true
+    },
+    "minecraft:bundle_contents": {
+      "wireType": "slotList",
+      "passthrough": true
+    },
+    "minecraft:container": {
+      "wireType": "slotList",
+      "passthrough": true
+    },
+    "minecraft:use_remainder": {
+      "wireType": "slot",
+      "passthrough": true
+    },
+    "minecraft:lore": {
+      "wireType": "loreList",
+      "passthrough": true
+    },
+    "minecraft:enchantments": {
+      "wireType": "enchantmentMap",
+      "passthrough": true
+    },
+    "minecraft:stored_enchantments": {
+      "wireType": "enchantmentMap",
+      "passthrough": true
+    },
+    "minecraft:can_break": {
+      "wireType": "blockPredicates",
+      "passthrough": true
+    },
+    "minecraft:can_place_on": {
+      "wireType": "blockPredicates",
+      "passthrough": true
+    },
+    "minecraft:custom_model_data": {
+      "wireType": "customModelData",
+      "passthrough": true
+    },
+    "minecraft:consumable": {
+      "wireType": "consumable",
+      "passthrough": true
+    },
+    "minecraft:use_effects": {
+      "wireType": "useEffects",
+      "passthrough": true
+    },
+    "minecraft:tool": {
+      "wireType": "tool",
+      "passthrough": true
+    },
+    "minecraft:attack_range": {
+      "wireType": "attackRange",
+      "passthrough": true
+    },
+    "minecraft:equippable": {
+      "wireType": "equippable",
+      "passthrough": true
+    },
+    "minecraft:death_protection": {
+      "wireType": "deathProtection",
+      "passthrough": true
+    },
+    "minecraft:blocks_attacks": {
+      "wireType": "blocksAttacks",
+      "passthrough": true
+    },
+    "minecraft:kinetic_weapon": {
+      "wireType": "kineticWeapon",
+      "passthrough": true
+    },
+    "minecraft:piercing_weapon": {
+      "wireType": "piercingWeapon",
+      "passthrough": true
+    },
+    "minecraft:potion_contents": {
+      "wireType": "potionContents",
+      "passthrough": true
+    },
+    "minecraft:suspicious_stew_effects": {
+      "wireType": "suspiciousStew",
+      "passthrough": true
+    },
+    "minecraft:writable_book_content": {
+      "wireType": "writableBook",
+      "passthrough": true
+    },
+    "minecraft:written_book_content": {
+      "wireType": "writtenBook",
+      "passthrough": true
+    },
+    "minecraft:trim": {
+      "wireType": "trim",
+      "passthrough": true
+    },
+    "minecraft:recipes": {
+      "wireType": "recipes",
+      "passthrough": true
+    },
+    "minecraft:lodestone_tracker": {
+      "wireType": "lodestone",
+      "passthrough": true
+    },
+    "minecraft:firework_explosion": {
+      "wireType": "fireworkExplosion",
+      "passthrough": true
+    },
+    "minecraft:profile": {
+      "wireType": "profile",
+      "passthrough": true
+    },
+    "minecraft:banner_patterns": {
+      "wireType": "bannerPatterns",
+      "passthrough": true
+    },
+    "minecraft:pot_decorations": {
+      "wireType": "potDecorations",
+      "passthrough": true
+    },
+    "minecraft:block_state": {
+      "wireType": "blockState",
+      "passthrough": true
+    },
+    "minecraft:bees": {
+      "wireType": "bees",
+      "passthrough": true
+    }
+  }
+}

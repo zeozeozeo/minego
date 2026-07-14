@@ -1,0 +1,303 @@
+{
+  "_comment": "generated in ./main.go:generateEntityMetadata(), see EntityDataSerializers.java and entity classes in Minecraft source code",
+  "serializers": {
+    "0": {"name": "BYTE", "wireType": "byte"},
+    "1": {"name": "INT", "wireType": "varint"},
+    "2": {"name": "LONG", "wireType": "varlong"},
+    "3": {"name": "FLOAT", "wireType": "float32"},
+    "4": {"name": "STRING", "wireType": "string"},
+    "5": {"name": "COMPONENT", "wireType": "nbt"},
+    "6": {"name": "OPTIONAL_COMPONENT", "wireType": "optional_nbt"},
+    "7": {"name": "ITEM_STACK", "wireType": "slot"},
+    "8": {"name": "BOOLEAN", "wireType": "bool"},
+    "9": {"name": "ROTATIONS", "wireType": "rotations"},
+    "10": {"name": "BLOCK_POS", "wireType": "position"},
+    "11": {"name": "OPTIONAL_BLOCK_POS", "wireType": "optional_position"},
+    "12": {"name": "DIRECTION", "wireType": "varint"},
+    "13": {"name": "OPTIONAL_LIVING_ENTITY_REFERENCE", "wireType": "optional_uuid"},
+    "14": {"name": "BLOCK_STATE", "wireType": "varint"},
+    "15": {"name": "OPTIONAL_BLOCK_STATE", "wireType": "varint"},
+    "16": {"name": "PARTICLE", "wireType": "particle"},
+    "17": {"name": "PARTICLES", "wireType": "particle_list"},
+    "18": {"name": "VILLAGER_DATA", "wireType": "villager_data"},
+    "19": {"name": "OPTIONAL_UNSIGNED_INT", "wireType": "optional_varint"},
+    "20": {"name": "POSE", "wireType": "varint"},
+    "21": {"name": "CAT_VARIANT", "wireType": "varint"},
+    "22": {"name": "CAT_SOUND_VARIANT", "wireType": "varint"},
+    "23": {"name": "COW_VARIANT", "wireType": "varint"},
+    "24": {"name": "COW_SOUND_VARIANT", "wireType": "varint"},
+    "25": {"name": "WOLF_VARIANT", "wireType": "varint"},
+    "26": {"name": "WOLF_SOUND_VARIANT", "wireType": "varint"},
+    "27": {"name": "FROG_VARIANT", "wireType": "varint"},
+    "28": {"name": "PIG_VARIANT", "wireType": "varint"},
+    "29": {"name": "PIG_SOUND_VARIANT", "wireType": "varint"},
+    "30": {"name": "CHICKEN_VARIANT", "wireType": "varint"},
+    "31": {"name": "CHICKEN_SOUND_VARIANT", "wireType": "varint"},
+    "32": {"name": "ZOMBIE_NAUTILUS_VARIANT", "wireType": "varint"},
+    "33": {"name": "OPTIONAL_GLOBAL_POS", "wireType": "optional_global_pos"},
+    "34": {"name": "PAINTING_VARIANT", "wireType": "id_or_inline"},
+    "35": {"name": "SNIFFER_STATE", "wireType": "varint"},
+    "36": {"name": "ARMADILLO_STATE", "wireType": "varint"},
+    "37": {"name": "COPPER_GOLEM_STATE", "wireType": "varint"},
+    "38": {"name": "WEATHERING_COPPER_STATE", "wireType": "varint"},
+    "39": {"name": "VECTOR3", "wireType": "vector3f"},
+    "40": {"name": "QUATERNION", "wireType": "quaternionf"},
+    "41": {"name": "RESOLVABLE_PROFILE", "wireType": "resolvable_profile"},
+    "42": {"name": "HUMANOID_ARM", "wireType": "varint"}
+  },
+  "entities": {
+    "Entity": {
+      "parent": null,
+      "fields": [
+        {"index": 0, "name": "Flags", "serializer": 0, "goField": "Flags", "goType": "byte", "description": "on_fire|sneaking|sprinting|swimming|invisible|glowing|fall_flying"},
+        {"index": 1, "name": "AirSupply", "serializer": 1, "goField": "AirSupply", "goType": "int32", "description": "air ticks remaining"},
+        {"index": 2, "name": "CustomName", "serializer": 6, "goField": "CustomName", "goType": "*string", "description": "optional custom name"},
+        {"index": 3, "name": "CustomNameVisible", "serializer": 8, "goField": "CustomNameVisible", "goType": "bool"},
+        {"index": 4, "name": "Silent", "serializer": 8, "goField": "Silent", "goType": "bool"},
+        {"index": 5, "name": "NoGravity", "serializer": 8, "goField": "NoGravity", "goType": "bool"},
+        {"index": 6, "name": "Pose", "serializer": 20, "goField": "Pose", "goType": "int32", "description": "standing=0,fall_flying=1,sleeping=2,swimming=3,spin_attack=4,sneaking=5,long_jumping=6,dying=7,croaking=8,using_tongue=9,sitting=10,roaring=11,sniffing=12,emerging=13,digging=14,sliding=15,shooting=16,inhaling=17"},
+        {"index": 7, "name": "TicksFrozen", "serializer": 1, "goField": "TicksFrozen", "goType": "int32", "description": "ticks in powder snow"}
+      ]
+    },
+    "LivingEntity": {
+      "parent": "Entity",
+      "fields": [
+        {"index": 8, "name": "LivingEntityFlags", "serializer": 0, "goField": "LivingFlags", "goType": "byte", "description": "hand_active|active_hand|riptide_spin_attack"},
+        {"index": 9, "name": "Health", "serializer": 3, "goField": "Health", "goType": "float32"},
+        {"index": 10, "name": "EffectParticles", "serializer": 17, "goField": "EffectParticles", "goType": "[]Particle", "passthrough": true},
+        {"index": 11, "name": "EffectAmbience", "serializer": 8, "goField": "EffectAmbient", "goType": "bool"},
+        {"index": 12, "name": "ArrowCount", "serializer": 1, "goField": "ArrowCount", "goType": "int32"},
+        {"index": 13, "name": "StingerCount", "serializer": 1, "goField": "StingerCount", "goType": "int32"},
+        {"index": 14, "name": "SleepingPos", "serializer": 11, "goField": "SleepingPos", "goType": "*Position", "passthrough": true}
+      ]
+    },
+    "Mob": {
+      "parent": "LivingEntity",
+      "fields": [
+        {"index": 15, "name": "MobFlags", "serializer": 0, "goField": "MobFlags", "goType": "byte", "description": "no_ai|left_handed|aggressive"}
+      ]
+    },
+    "AgeableMob": {
+      "parent": "Mob",
+      "fields": [
+        {"index": 16, "name": "IsBaby", "serializer": 8, "goField": "IsBaby", "goType": "bool"}
+      ]
+    },
+    "Avatar": {
+      "parent": "LivingEntity",
+      "fields": [
+        {"index": 15, "name": "MainHand", "serializer": 42, "goField": "MainHand", "goType": "byte", "description": "0=left,1=right (HUMANOID_ARM)"},
+        {"index": 16, "name": "DisplayedSkinParts", "serializer": 0, "goField": "SkinParts", "goType": "byte", "description": "cape|jacket|left_sleeve|right_sleeve|left_pants|right_pants|hat"}
+      ]
+    },
+    "Player": {
+      "parent": "Avatar",
+      "fields": [
+        {"index": 17, "name": "AdditionalHearts", "serializer": 3, "goField": "AdditionalHearts", "goType": "float32"},
+        {"index": 18, "name": "Score", "serializer": 1, "goField": "Score", "goType": "int32"},
+        {"index": 19, "name": "ShoulderEntityLeft", "serializer": 19, "goField": "LeftShoulderEntity", "goType": "*int32", "passthrough": true},
+        {"index": 20, "name": "ShoulderEntityRight", "serializer": 19, "goField": "RightShoulderEntity", "goType": "*int32", "passthrough": true}
+      ]
+    },
+    "Creeper": {
+      "parent": "Mob",
+      "fields": [
+        {"index": 16, "name": "SwellDir", "serializer": 1, "goField": "SwellDir", "goType": "int32", "description": "-1=idle,1=fuse"},
+        {"index": 17, "name": "IsPowered", "serializer": 8, "goField": "IsPowered", "goType": "bool"},
+        {"index": 18, "name": "IsIgnited", "serializer": 8, "goField": "IsIgnited", "goType": "bool"}
+      ]
+    },
+    "Zombie": {
+      "parent": "Mob",
+      "fields": [
+        {"index": 16, "name": "IsBaby", "serializer": 8, "goField": "IsBaby", "goType": "bool"},
+        {"index": 17, "name": "SpecialType", "serializer": 1, "goField": "SpecialType", "goType": "int32", "description": "unused"},
+        {"index": 18, "name": "DrownedConversion", "serializer": 8, "goField": "BecomingDrowned", "goType": "bool"}
+      ]
+    },
+    "Pig": {
+      "parent": "AgeableMob",
+      "fields": [
+        {"index": 17, "name": "BoostTime", "serializer": 1, "goField": "BoostTime", "goType": "int32"},
+        {"index": 18, "name": "Variant", "serializer": 28, "goField": "Variant", "goType": "int32"},
+        {"index": 19, "name": "SoundVariant", "serializer": 29, "goField": "SoundVariant", "goType": "int32"}
+      ]
+    },
+    "ArmorStand": {
+      "parent": "LivingEntity",
+      "fields": [
+        {"index": 15, "name": "ArmorStandFlags", "serializer": 0, "goField": "ArmorStandFlags", "goType": "byte", "description": "small|arms|no_baseplate|marker"},
+        {"index": 16, "name": "HeadPose", "serializer": 9, "goField": "HeadPose", "goType": "Rotations"},
+        {"index": 17, "name": "BodyPose", "serializer": 9, "goField": "BodyPose", "goType": "Rotations"},
+        {"index": 18, "name": "LeftArmPose", "serializer": 9, "goField": "LeftArmPose", "goType": "Rotations"},
+        {"index": 19, "name": "RightArmPose", "serializer": 9, "goField": "RightArmPose", "goType": "Rotations"},
+        {"index": 20, "name": "LeftLegPose", "serializer": 9, "goField": "LeftLegPose", "goType": "Rotations"},
+        {"index": 21, "name": "RightLegPose", "serializer": 9, "goField": "RightLegPose", "goType": "Rotations"}
+      ]
+    },
+    "ItemEntity": {
+      "parent": "Entity",
+      "fields": [
+        {"index": 8, "name": "Item", "serializer": 7, "goField": "Item", "goType": "Slot", "passthrough": true}
+      ]
+    },
+    "ItemFrame": {
+      "parent": "Entity",
+      "fields": [
+        {"index": 8, "name": "Item", "serializer": 7, "goField": "Item", "goType": "Slot", "passthrough": true},
+        {"index": 9, "name": "Rotation", "serializer": 1, "goField": "Rotation", "goType": "int32"}
+      ]
+    },
+    "Villager": {
+      "parent": "AgeableMob",
+      "fields": [
+        {"index": 17, "name": "VillagerData", "serializer": 18, "goField": "VillagerData", "goType": "VillagerData", "passthrough": true}
+      ]
+    },
+    "Wolf": {
+      "parent": "AgeableMob",
+      "fields": [
+        {"index": 17, "name": "IsTamed", "serializer": 8, "goField": "IsTamed", "goType": "bool"},
+        {"index": 18, "name": "Variant", "serializer": 25, "goField": "Variant", "goType": "int32"},
+        {"index": 19, "name": "SoundVariant", "serializer": 26, "goField": "SoundVariant", "goType": "int32"},
+        {"index": 20, "name": "IsAngry", "serializer": 8, "goField": "IsAngry", "goType": "bool"},
+        {"index": 21, "name": "CollarColor", "serializer": 1, "goField": "CollarColor", "goType": "int32"}
+      ]
+    },
+    "Cat": {
+      "parent": "AgeableMob",
+      "fields": [
+        {"index": 17, "name": "Variant", "serializer": 21, "goField": "Variant", "goType": "int32"},
+        {"index": 18, "name": "IsLying", "serializer": 8, "goField": "IsLying", "goType": "bool"},
+        {"index": 19, "name": "IsRelaxed", "serializer": 8, "goField": "IsRelaxed", "goType": "bool"},
+        {"index": 20, "name": "CollarColor", "serializer": 1, "goField": "CollarColor", "goType": "int32"},
+        {"index": 21, "name": "SoundVariant", "serializer": 22, "goField": "SoundVariant", "goType": "int32"}
+      ]
+    },
+    "Sheep": {
+      "parent": "AgeableMob",
+      "fields": [
+        {"index": 17, "name": "ColorAndSheared", "serializer": 0, "goField": "ColorFlags", "goType": "byte", "description": "color(0-3)|sheared(4)"}
+      ]
+    },
+    "Cow": {
+      "parent": "AgeableMob",
+      "fields": [
+        {"index": 17, "name": "Variant", "serializer": 23, "goField": "Variant", "goType": "int32"},
+        {"index": 18, "name": "SoundVariant", "serializer": 24, "goField": "SoundVariant", "goType": "int32"}
+      ]
+    },
+    "Chicken": {
+      "parent": "AgeableMob",
+      "fields": [
+        {"index": 17, "name": "Variant", "serializer": 30, "goField": "Variant", "goType": "int32"},
+        {"index": 18, "name": "SoundVariant", "serializer": 31, "goField": "SoundVariant", "goType": "int32"}
+      ]
+    },
+    "Skeleton": {
+      "parent": "Mob",
+      "fields": [
+        {"index": 16, "name": "IsConverting", "serializer": 8, "goField": "IsConverting", "goType": "bool"}
+      ]
+    },
+    "Spider": {
+      "parent": "Mob",
+      "fields": [
+        {"index": 16, "name": "SpiderFlags", "serializer": 0, "goField": "SpiderFlags", "goType": "byte", "description": "climbing"}
+      ]
+    },
+    "Slime": {
+      "parent": "Mob",
+      "fields": [
+        {"index": 16, "name": "Size", "serializer": 1, "goField": "Size", "goType": "int32"}
+      ]
+    },
+    "Enderman": {
+      "parent": "Mob",
+      "fields": [
+        {"index": 16, "name": "CarriedBlock", "serializer": 15, "goField": "CarriedBlock", "goType": "*int32"},
+        {"index": 17, "name": "IsScreaming", "serializer": 8, "goField": "IsScreaming", "goType": "bool"},
+        {"index": 18, "name": "IsStaring", "serializer": 8, "goField": "IsStaring", "goType": "bool"}
+      ]
+    },
+    "EnderDragon": {
+      "parent": "Mob",
+      "fields": [
+        {"index": 16, "name": "Phase", "serializer": 1, "goField": "Phase", "goType": "int32"}
+      ]
+    },
+    "Wither": {
+      "parent": "Mob",
+      "fields": [
+        {"index": 16, "name": "TargetA", "serializer": 1, "goField": "TargetA", "goType": "int32"},
+        {"index": 17, "name": "TargetB", "serializer": 1, "goField": "TargetB", "goType": "int32"},
+        {"index": 18, "name": "TargetC", "serializer": 1, "goField": "TargetC", "goType": "int32"},
+        {"index": 19, "name": "InvulnerableTime", "serializer": 1, "goField": "InvulnerableTime", "goType": "int32"}
+      ]
+    },
+    "Ghast": {
+      "parent": "Mob",
+      "fields": [
+        {"index": 16, "name": "IsCharging", "serializer": 8, "goField": "IsCharging", "goType": "bool"}
+      ]
+    },
+    "Blaze": {
+      "parent": "Mob",
+      "fields": [
+        {"index": 16, "name": "BlazeFlags", "serializer": 0, "goField": "BlazeFlags", "goType": "byte", "description": "on_fire"}
+      ]
+    },
+    "Bat": {
+      "parent": "Mob",
+      "fields": [
+        {"index": 16, "name": "BatFlags", "serializer": 0, "goField": "BatFlags", "goType": "byte", "description": "hanging"}
+      ]
+    },
+    "ExperienceOrb": {
+      "parent": "Entity",
+      "fields": []
+    },
+    "Arrow": {
+      "parent": "Entity",
+      "fields": [
+        {"index": 8, "name": "ArrowFlags", "serializer": 0, "goField": "ArrowFlags", "goType": "byte", "description": "critical|no_physics"},
+        {"index": 9, "name": "PierceLevel", "serializer": 0, "goField": "PierceLevel", "goType": "byte"},
+        {"index": 10, "name": "InGround", "serializer": 8, "goField": "InGround", "goType": "bool"}
+      ]
+    },
+    "Fireball": {
+      "parent": "Entity",
+      "fields": [
+        {"index": 8, "name": "Item", "serializer": 7, "goField": "Item", "goType": "Slot", "passthrough": true}
+      ]
+    },
+    "FallingBlock": {
+      "parent": "Entity",
+      "fields": [
+        {"index": 8, "name": "SpawnPosition", "serializer": 10, "goField": "SpawnPos", "goType": "Position"}
+      ]
+    },
+    "Boat": {
+      "parent": "Entity",
+      "fields": [
+        {"index": 8, "name": "HurtTime", "serializer": 1, "goField": "HurtTime", "goType": "int32"},
+        {"index": 9, "name": "HurtDir", "serializer": 1, "goField": "HurtDir", "goType": "int32"},
+        {"index": 10, "name": "Damage", "serializer": 3, "goField": "Damage", "goType": "float32"},
+        {"index": 11, "name": "PaddleLeft", "serializer": 8, "goField": "PaddleLeft", "goType": "bool"},
+        {"index": 12, "name": "PaddleRight", "serializer": 8, "goField": "PaddleRight", "goType": "bool"},
+        {"index": 13, "name": "BubbleTime", "serializer": 1, "goField": "BubbleTime", "goType": "int32"}
+      ]
+    },
+    "Minecart": {
+      "parent": "Entity",
+      "fields": [
+        {"index": 8, "name": "HurtTime", "serializer": 1, "goField": "HurtTime", "goType": "int32"},
+        {"index": 9, "name": "HurtDir", "serializer": 1, "goField": "HurtDir", "goType": "int32"},
+        {"index": 10, "name": "Damage", "serializer": 3, "goField": "Damage", "goType": "float32"},
+        {"index": 11, "name": "DisplayBlock", "serializer": 1, "goField": "DisplayBlock", "goType": "int32"},
+        {"index": 12, "name": "DisplayOffset", "serializer": 1, "goField": "DisplayOffset", "goType": "int32"},
+        {"index": 13, "name": "CustomDisplay", "serializer": 8, "goField": "CustomDisplay", "goType": "bool"}
+      ]
+    }
+  }
+}

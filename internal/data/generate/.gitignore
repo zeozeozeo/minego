@@ -1,0 +1,8 @@
+items
+blocks.json
+registries.json
+packets.json
+en_us.json
+items/
+mcdump/
+!*.include.json
