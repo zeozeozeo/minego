@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/zeozeozeo/minego/internal/data/packets"
+	"github.com/zeozeozeo/minego/internal/data/versions/v26_2/packets"
 	ns "github.com/zeozeozeo/minego/internal/protocol/java_protocol/net_structures"
 )
 
@@ -116,6 +116,12 @@ func (n *Navigator) Path(start BlockPos, goal Goal, opt NavigationOptions) ([]Pa
 	return n.findPath(start, goal, defaultsNav(opt))
 }
 func (n *Navigator) Navigate(ctx context.Context, goal Goal, opt NavigationOptions) (NavigationResult, error) {
+	lease, err := n.bot.actions.acquire(ctx, controlMovement|controlView, priorityAutomation)
+	if err != nil {
+		return NavigationResult{}, err
+	}
+	defer lease.Release()
+	ctx = lease.Context(ctx)
 	opt = defaultsNav(opt)
 	start := n.bot.Self.State().Position.Block()
 	path, err := n.findPath(start, goal, opt)

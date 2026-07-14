@@ -4,10 +4,10 @@ import (
 	"fmt"
 
 	"github.com/zeozeozeo/minego/internal/data/chunks"
-	dataentities "github.com/zeozeozeo/minego/internal/data/entities"
-	"github.com/zeozeozeo/minego/internal/data/lang"
-	"github.com/zeozeozeo/minego/internal/data/packet_ids"
-	"github.com/zeozeozeo/minego/internal/data/packets"
+	dataentities "github.com/zeozeozeo/minego/internal/data/versions/v26_2/entities"
+	"github.com/zeozeozeo/minego/internal/data/versions/v26_2/lang"
+	"github.com/zeozeozeo/minego/internal/data/versions/v26_2/packet_ids"
+	"github.com/zeozeozeo/minego/internal/data/versions/v26_2/packets"
 	jp "github.com/zeozeozeo/minego/internal/protocol/java_protocol"
 	ns "github.com/zeozeozeo/minego/internal/protocol/java_protocol/net_structures"
 	"github.com/zeozeozeo/minego/internal/protocol/nbt"
@@ -59,6 +59,16 @@ func (b *Bot) handlePlay(w *jp.WirePacket) error {
 			b.Navigator.Stop()
 			return b.client.WritePacket(&packets.C2SClientCommand{ActionId: 0})
 		}
+	case packet_ids.S2CSetTimeID:
+		var p packets.S2CSetTime
+		if err := w.ReadInto(&p); err != nil {
+			return err
+		}
+		time := TimeState{WorldAge: int64(p.WorldAge), Clocks: make([]ClockState, len(p.ClockUpdates))}
+		for i, clock := range p.ClockUpdates {
+			time.Clocks[i] = ClockState{ID: int32(clock.WorldClock), TotalTicks: int64(clock.TotalTicks), PartialTick: float32(clock.PartialTick), Rate: float32(clock.Rate)}
+		}
+		b.World.updateTime(time)
 	case packet_ids.S2CUpdateMobEffectID:
 		var p packets.S2CUpdateMobEffect
 		if err := w.ReadInto(&p); err != nil {

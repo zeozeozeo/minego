@@ -13,6 +13,19 @@ type BlockEntity struct {
 	Data nbt.Compound
 }
 
+// TimeState is an immutable snapshot of the server's world-clock update.
+// Clocks are kept in wire order because their registry identities are
+// version-owned and may differ between releases.
+type TimeState struct {
+	WorldAge int64
+	Clocks   []ClockState
+}
+type ClockState struct {
+	ID                int32
+	TotalTicks        int64
+	PartialTick, Rate float32
+}
+
 // World is a concurrency-safe view of loaded server chunks.
 type World struct {
 	bot           *Bot
@@ -24,6 +37,8 @@ type World struct {
 	viewDistance  int32
 	onBlock       event[BlockChange]
 	onChunk       event[chunkKey]
+	time          TimeState
+	onTime        event[TimeState]
 }
 
 func newWorld(b *Bot) *World {
@@ -60,6 +75,21 @@ func (w *World) LoadedChunks() [][2]int32 {
 func (w *World) OnBlockChange(fn func(BlockChange)) func() { return w.onBlock.subscribe(fn) }
 func (w *World) OnChunkLoad(fn func(x, z int32)) func() {
 	return w.onChunk.subscribe(func(k chunkKey) { fn(k.X, k.Z) })
+}
+func (w *World) Time() TimeState {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	v := w.time
+	v.Clocks = append([]ClockState(nil), v.Clocks...)
+	return v
+}
+func (w *World) OnTime(fn func(TimeState)) func() { return w.onTime.subscribe(fn) }
+func (w *World) updateTime(v TimeState) {
+	v.Clocks = append([]ClockState(nil), v.Clocks...)
+	w.mu.Lock()
+	w.time = v
+	w.mu.Unlock()
+	w.onTime.emit(v)
 }
 func (w *World) reset(dimension string) {
 	w.mu.Lock()

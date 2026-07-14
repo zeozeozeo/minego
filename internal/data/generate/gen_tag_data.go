@@ -123,7 +123,7 @@ func generateTagData(tagsDir, outPath string) {
 
 			// tag name from relative path within the registry root
 			rel, _ := filepath.Rel(reg.path, path)
-			tagName := "minecraft:" + strings.TrimSuffix(rel, ".json")
+			tagName := "minecraft:" + strings.TrimSuffix(filepath.ToSlash(rel), ".json")
 
 			values := make([]string, len(tag.Values))
 			for i, v := range tag.Values {

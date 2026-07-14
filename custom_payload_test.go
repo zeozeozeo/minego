@@ -2,8 +2,8 @@ package minego
 
 import (
 	"encoding/hex"
-	"github.com/zeozeozeo/minego/internal/data/packet_ids"
-	"github.com/zeozeozeo/minego/internal/data/packets"
+	"github.com/zeozeozeo/minego/internal/data/versions/v26_2/packet_ids"
+	"github.com/zeozeozeo/minego/internal/data/versions/v26_2/packets"
 	jp "github.com/zeozeozeo/minego/internal/protocol/java_protocol"
 	"testing"
 )

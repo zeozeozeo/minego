@@ -9,7 +9,7 @@ import (
 )
 
 func syntheticBot(t *testing.T) *Bot {
-	b, err := New(Config{Address: "localhost", Auth: Offline("test")})
+	b, err := New(Config{Address: "localhost", Version: "26.2", Auth: Offline("test")})
 	if err != nil {
 		t.Fatal(err)
 	}

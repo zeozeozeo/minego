@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/zeozeozeo/minego/internal/data/packets"
-	"github.com/zeozeozeo/minego/internal/data/registries"
+	"github.com/zeozeozeo/minego/internal/data/versions/v26_2/packets"
+	"github.com/zeozeozeo/minego/internal/data/versions/v26_2/registries"
 	ns "github.com/zeozeozeo/minego/internal/protocol/java_protocol/net_structures"
 )
 

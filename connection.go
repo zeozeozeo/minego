@@ -3,6 +3,7 @@ package minego
 import (
 	"context"
 	"crypto/md5"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -10,16 +11,66 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zeozeozeo/minego/internal/data/packet_ids"
-	"github.com/zeozeozeo/minego/internal/data/packets"
+	"github.com/zeozeozeo/minego/internal/data/misc"
+	"github.com/zeozeozeo/minego/internal/data/versions/v26_2/packet_ids"
+	"github.com/zeozeozeo/minego/internal/data/versions/v26_2/packets"
 	pauth "github.com/zeozeozeo/minego/internal/protocol/auth"
 	jp "github.com/zeozeozeo/minego/internal/protocol/java_protocol"
 	ns "github.com/zeozeozeo/minego/internal/protocol/java_protocol/net_structures"
 	"github.com/zeozeozeo/minego/internal/protocol/java_protocol/session_server"
+	"github.com/zeozeozeo/minego/internal/protocol/normalized"
 	"github.com/zeozeozeo/minego/version"
+	"github.com/zeozeozeo/minego/versions"
 )
 
 func jpVarInt(v int32) ns.VarInt { return ns.VarInt(v) }
+
+type packetPayload interface {
+	Read(*ns.PacketBuffer) error
+	Write(*ns.PacketBuffer) error
+}
+
+func (b *Bot) packetID(state version.State, bound version.Bound, name version.PacketName) (int32, error) {
+	b.mu.RLock()
+	pack := b.pack
+	b.mu.RUnlock()
+	if pack == nil {
+		return 0, errors.New("minego: no selected version pack")
+	}
+	id, ok := pack.PacketID(state, bound, name)
+	if !ok {
+		return 0, fmt.Errorf("minego: %s is unavailable for %s", name, pack.Name())
+	}
+	return id, nil
+}
+
+func (b *Bot) isPacket(w *jp.WirePacket, state version.State, name version.PacketName) bool {
+	id, err := b.packetID(state, version.Clientbound, name)
+	return err == nil && int32(w.PacketID) == id
+}
+
+func (b *Bot) readPacket(w *jp.WirePacket, state version.State, name version.PacketName, payload packetPayload) error {
+	id, err := b.packetID(state, version.Clientbound, name)
+	if err != nil {
+		return err
+	}
+	if int32(w.PacketID) != id {
+		return fmt.Errorf("packet ID mismatch for %s: expected 0x%02x, got 0x%02x", name, id, w.PacketID)
+	}
+	return payload.Read(ns.NewReader(w.Data))
+}
+
+func (b *Bot) writePacket(state version.State, name version.PacketName, payload packetPayload) error {
+	id, err := b.packetID(state, version.Serverbound, name)
+	if err != nil {
+		return err
+	}
+	buf := ns.NewWriter()
+	if err := payload.Write(buf); err != nil {
+		return err
+	}
+	return b.client.WriteWirePacket(&jp.WirePacket{PacketID: ns.VarInt(id), Data: buf.Bytes()})
+}
 
 func (b *Bot) Connect(ctx context.Context) error {
 	select {
@@ -33,12 +84,28 @@ func (b *Bot) Connect(ctx context.Context) error {
 		return ErrAlreadyConnected
 	}
 	b.mu.Unlock()
-	if err := b.authenticate(ctx); err != nil {
-		return fmt.Errorf("authenticate: %w", err)
-	}
 	host, port, address, err := resolveAddress(ctx, b.cfg.Address)
 	if err != nil {
 		return err
+	}
+	b.mu.RLock()
+	pack := b.pack
+	b.mu.RUnlock()
+	if pack == nil {
+		protocol, err := probeProtocol(ctx, host, port, address, b.cfg.DialTimeout)
+		if err != nil {
+			return fmt.Errorf("detect server version: %w", err)
+		}
+		pack, ok := versions.ByProtocol(protocol)
+		if !ok {
+			return &UnsupportedVersionError{Protocol: protocol, Supported: SupportedVersions()}
+		}
+		b.mu.Lock()
+		b.pack = pack
+		b.mu.Unlock()
+	}
+	if err := b.authenticate(ctx); err != nil {
+		return fmt.Errorf("authenticate: %w", err)
 	}
 	d := net.Dialer{Timeout: b.cfg.DialTimeout}
 	conn, err := d.DialContext(ctx, "tcp", address)
@@ -46,6 +113,7 @@ func (b *Bot) Connect(ctx context.Context) error {
 		return fmt.Errorf("connect %s: %w", address, err)
 	}
 	b.client = jp.NewTCPClient()
+	b.client.SetObservers(b.Observability.sent, b.Observability.received)
 	b.client.SetConn(jp.NewConn(conn))
 	b.client.SetState(jp.StateHandshake)
 	b.ctx, b.cancel = context.WithCancel(context.Background())
@@ -53,18 +121,68 @@ func (b *Bot) Connect(ctx context.Context) error {
 	b.connected = true
 	b.mu.Unlock()
 	portN, _ := strconv.Atoi(port)
-	if err = b.client.WritePacket(&packets.C2SIntention{ProtocolVersion: ns.VarInt(b.pack.Protocol()), ServerAddress: ns.String(host), ServerPort: ns.Uint16(portN), Intent: 2}); err != nil {
+	if err = b.writePacket(version.Handshake, version.PacketIntention, normalized.Handshake{Protocol: b.pack.Protocol(), Address: host, Port: uint16(portN), Intent: 2}); err != nil {
 		b.Close()
 		return err
 	}
 	b.client.SetState(jp.StateLogin)
 	uuid, _ := ns.UUIDFromString(b.uuid)
-	if err = b.client.WritePacket(&packets.C2SHello{Name: ns.String(b.username), PlayerUuid: uuid}); err != nil {
+	if err = b.writePacket(version.Login, version.PacketLoginHello, normalized.LoginStart{Name: b.username, UUID: uuid}); err != nil {
 		b.Close()
 		return err
 	}
 	go b.readLoop()
 	return nil
+}
+
+func probeProtocol(ctx context.Context, host, port, address string, timeout time.Duration) (int32, error) {
+	d := net.Dialer{Timeout: timeout}
+	conn, err := d.DialContext(ctx, "tcp", address)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+	deadline := time.Now().Add(10 * time.Second)
+	if timeout > 0 {
+		deadline = time.Now().Add(timeout)
+	}
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	_ = conn.SetDeadline(deadline)
+	client := jp.NewTCPClient()
+	client.SetConn(jp.NewConn(conn))
+	client.SetState(jp.StateHandshake)
+	portN, err := strconv.Atoi(port)
+	if err != nil {
+		return 0, fmt.Errorf("invalid server port %q: %w", port, err)
+	}
+	if err := client.WritePacket(&packets.C2SIntention{ProtocolVersion: -1, ServerAddress: ns.String(host), ServerPort: ns.Uint16(portN), Intent: 1}); err != nil {
+		return 0, err
+	}
+	client.SetState(jp.StateStatus)
+	if err := client.WritePacket(&packets.C2SStatusRequest{}); err != nil {
+		return 0, err
+	}
+	wire, err := client.ReadWirePacket()
+	if err != nil {
+		return 0, err
+	}
+	if int32(wire.PacketID) != packet_ids.S2CStatusResponseID {
+		return 0, fmt.Errorf("unexpected status packet 0x%x", int32(wire.PacketID))
+	}
+	var response packets.S2CStatusResponse
+	if err := wire.ReadInto(&response); err != nil {
+		return 0, err
+	}
+	var status misc.ServerStatusResponse
+	if err := json.Unmarshal([]byte(response.JsonResponse), &status); err != nil {
+		return 0, fmt.Errorf("decode status response: %w", err)
+	}
+	if status.Version.Protocol <= 0 {
+		return 0, errors.New("status response omitted protocol version")
+	}
+	return int32(status.Version.Protocol), nil
 }
 
 func (b *Bot) authenticate(ctx context.Context) error {
@@ -139,38 +257,38 @@ func (b *Bot) readLoop() {
 }
 
 func (b *Bot) handleLogin(w *jp.WirePacket) error {
-	switch w.PacketID {
-	case packet_ids.S2CLoginCompressionID:
+	switch {
+	case b.isPacket(w, version.Login, version.PacketLoginCompression):
 		var p packets.S2CLoginCompression
-		if err := w.ReadInto(&p); err != nil {
+		if err := b.readPacket(w, version.Login, version.PacketLoginCompression, &p); err != nil {
 			return err
 		}
 		b.client.SetCompressionThreshold(int(p.Threshold))
-	case packet_ids.S2CHelloID:
+	case b.isPacket(w, version.Login, version.PacketLoginEncryption):
 		return b.handleEncryption(w)
-	case packet_ids.S2CCustomQueryID:
+	case b.isPacket(w, version.Login, version.PacketLoginPluginRequest):
 		var p packets.S2CCustomQuery
-		if err := w.ReadInto(&p); err != nil {
+		if err := b.readPacket(w, version.Login, version.PacketLoginPluginRequest, &p); err != nil {
 			return err
 		}
 		// Unknown login plugin channels must receive an explicit unsuccessful
 		// response or the server will keep the connection in login state.
-		return b.client.WritePacket(&packets.C2SCustomQueryAnswer{MessageId: p.MessageId})
-	case packet_ids.S2CLoginFinishedID:
+		return b.writePacket(version.Login, version.PacketLoginPluginResponse, normalized.LoginPluginResponse{MessageID: int32(p.MessageId)})
+	case b.isPacket(w, version.Login, version.PacketLoginSuccess):
 		var p packets.S2CLoginFinished
-		if err := w.ReadInto(&p); err != nil {
+		if err := b.readPacket(w, version.Login, version.PacketLoginSuccess, &p); err != nil {
 			return err
 		}
 		b.username = string(p.Profile.Name)
 		b.uuid = p.Profile.UUID.String()
-		if err := b.client.WritePacket(&packets.C2SLoginAcknowledged{}); err != nil {
+		if err := b.writePacket(version.Login, version.PacketLoginAcknowledged, normalized.LoginAcknowledged{}); err != nil {
 			return err
 		}
 		b.client.SetState(jp.StateConfiguration)
 		return b.sendClientInfo()
-	case packet_ids.S2CLoginDisconnectID:
+	case b.isPacket(w, version.Login, version.PacketLoginDisconnect):
 		var p packets.S2CLoginDisconnectLogin
-		_ = w.ReadInto(&p)
+		_ = b.readPacket(w, version.Login, version.PacketLoginDisconnect, &p)
 		return fmt.Errorf("login disconnected: %s", p.Reason.String())
 	}
 	return nil
@@ -178,7 +296,7 @@ func (b *Bot) handleLogin(w *jp.WirePacket) error {
 
 func (b *Bot) handleEncryption(w *jp.WirePacket) error {
 	var p packets.S2CHello
-	if err := w.ReadInto(&p); err != nil {
+	if err := b.readPacket(w, version.Login, version.PacketLoginEncryption, &p); err != nil {
 		return err
 	}
 	if b.accessToken == "" && bool(p.ShouldAuthenticate) {
@@ -202,7 +320,7 @@ func (b *Bot) handleEncryption(w *jp.WirePacket) error {
 			return err
 		}
 	}
-	if err := b.client.WritePacket(&packets.C2SKey{SharedSecret: a, VerifyToken: token}); err != nil {
+	if err := b.writePacket(version.Login, version.PacketLoginEncryptionAnswer, normalized.EncryptionResponse{SharedSecret: a, VerifyToken: token}); err != nil {
 		return err
 	}
 	return enc.EnableEncryption()

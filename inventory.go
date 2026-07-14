@@ -2,8 +2,8 @@ package minego
 
 import (
 	"context"
-	"github.com/zeozeozeo/minego/internal/data/items"
-	"github.com/zeozeozeo/minego/internal/data/packets"
+	"github.com/zeozeozeo/minego/internal/data/versions/v26_2/items"
+	"github.com/zeozeozeo/minego/internal/data/versions/v26_2/packets"
 	ns "github.com/zeozeozeo/minego/internal/protocol/java_protocol/net_structures"
 	"sync"
 )
@@ -31,6 +31,12 @@ func (i *Inventory) Select(ctx context.Context, hotbar int) error {
 	if hotbar < 0 || hotbar > 8 {
 		return ErrInvalidSlot
 	}
+	lease, err := i.bot.actions.acquire(ctx, controlInventory, priorityExplicit)
+	if err != nil {
+		return err
+	}
+	defer lease.Release()
+	ctx = lease.Context(ctx)
 	if err := i.bot.send(ctx, &packets.C2SSetCarriedItem{Slot: ns.Int16(hotbar)}); err != nil {
 		return err
 	}

@@ -20,7 +20,7 @@ type mcdumpBlocks struct {
 // generateBlockShapes reads the mod's blocks.json (real game collision shapes per
 // block state) and emits a compact shapes table + state->shape index. Shape index
 // 0 is always the empty shape so HasCollision/IsFullBlock stay valid.
-func generateBlockShapes(mcdumpPath, outPath string) {
+func generateBlockShapes(mcdumpPath, outPath, importRoot string) {
 	dump := loadJSON[mcdumpBlocks](mcdumpPath)
 
 	// re-intern shapes with the empty shape pinned at index 0.
@@ -60,7 +60,7 @@ func generateBlockShapes(mcdumpPath, outPath string) {
 
 	var sb strings.Builder
 	sb.WriteString(generatedFileHeader("blocks"))
-	sb.WriteString("import \"github.com/zeozeozeo/minego/internal/data/hitboxes\"\n\n")
+	sb.WriteString("import \"" + importRoot + "/hitboxes\"\n\n")
 	sb.WriteString(fmt.Sprintf("const fullBlockShapeIdx = %d\n\n", fullBlockIdx))
 
 	sb.WriteString(fmt.Sprintf("// shapes contains %d unique collision shapes (shape 0 is empty).\n", len(compact)))

@@ -17,8 +17,15 @@ type TCPClient struct {
 	state                State
 	compressionThreshold int
 
-	debug  bool
-	logger *log.Logger
+	debug              bool
+	logger             *log.Logger
+	onSent, onReceived func(int)
+}
+
+// SetObservers installs optional callbacks invoked after successful wire I/O.
+// The callbacks must be concurrency-safe and return promptly.
+func (c *TCPClient) SetObservers(onSent, onReceived func(int)) {
+	c.onSent, c.onReceived = onSent, onReceived
 }
 
 // NewTCPClient creates a new TCP client.
@@ -120,6 +127,9 @@ func (c *TCPClient) WritePacket(p Packet) error {
 	if err := wire.WriteTo(c.conn, c.compressionThreshold); err != nil {
 		return fmt.Errorf("failed to write packet: %w", err)
 	}
+	if c.onSent != nil {
+		c.onSent(len(wire.Data))
+	}
 
 	return nil
 }
@@ -139,6 +149,9 @@ func (c *TCPClient) WriteWirePacket(pkt *WirePacket) error {
 	if err := pkt.WriteTo(c.conn, c.compressionThreshold); err != nil {
 		return fmt.Errorf("failed to write wire packet: %w", err)
 	}
+	if c.onSent != nil {
+		c.onSent(len(pkt.Data))
+	}
 
 	return nil
 }
@@ -153,6 +166,9 @@ func (c *TCPClient) ReadWirePacket() (*WirePacket, error) {
 	wire, err := ReadWirePacketFrom(c.conn, c.compressionThreshold)
 	if err != nil {
 		return nil, err
+	}
+	if c.onReceived != nil {
+		c.onReceived(len(wire.Data))
 	}
 
 	c.debugf("<- recv: id=0x%02X len=%d data_len=%d", int(wire.PacketID), int(wire.Length), len(wire.Data))

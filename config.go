@@ -6,7 +6,6 @@ import (
 	"time"
 
 	pauth "github.com/zeozeozeo/minego/internal/protocol/auth"
-	"github.com/zeozeozeo/minego/version"
 )
 
 type ResourcePackPolicy uint8
@@ -18,8 +17,10 @@ const (
 
 // Config controls a bot connection. Zero values receive practical defaults.
 type Config struct {
-	Address            string
-	Version            version.Pack
+	Address string
+	// Version is a release name such as "26.2". An empty value probes the
+	// server status endpoint and selects the matching compiled-in protocol.
+	Version            string
 	Auth               Authentication
 	Locale             string
 	ViewDistance       int8
@@ -28,6 +29,7 @@ type Config struct {
 	ResourcePackPolicy ResourcePackPolicy
 	Brand              string
 	HTTPClient         *http.Client
+	Plugins            []Plugin
 }
 
 type AuthMode uint8

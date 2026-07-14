@@ -1,7 +1,8 @@
 # Adding a Minecraft version
 
-1. Run `go run ./tools/mcgen -version <version>` to obtain verified official
-   reports, collision dumps, translations, tags, and regenerated tables.
+1. Run `go run ./tools/mcgen -version <version>` (or `-versions a,b`) to obtain
+   verified official reports, collision dumps, translations, tags, and tables
+   under `internal/data/versions/v<version>`. It never overwrites another pack.
 2. Keep the generated data isolated from existing packs. Add a value in
    `versions/` implementing `version.Pack`; its `Protocol` method and packet
    registry must match the new `packets.json` report.
@@ -13,6 +14,10 @@
    a protocol number.
 5. Run `go test -race ./...`, `go vet ./...`, and the gated offline dedicated-
    server integration test for the new version before exposing the pack.
+
+The dumper currently compiles directly against Mojang-named server artifacts.
+If an older official server jar is obfuscated (as 1.21.11 is), add and test a
+mappings/remapping adapter before treating its generated tables as authoritative.
 
 Raw generator inputs and downloaded jars are ignored; generated Go tables and
 the version pack are committed. This makes review show exactly which registry,

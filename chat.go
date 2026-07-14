@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zeozeozeo/minego/internal/data/packets"
+	"github.com/zeozeozeo/minego/internal/data/versions/v26_2/packets"
 	ns "github.com/zeozeozeo/minego/internal/protocol/java_protocol/net_structures"
 )
 

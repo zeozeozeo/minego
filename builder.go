@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zeozeozeo/minego/internal/data/packets"
-	"github.com/zeozeozeo/minego/internal/data/registries"
+	"github.com/zeozeozeo/minego/internal/data/versions/v26_2/packets"
+	"github.com/zeozeozeo/minego/internal/data/versions/v26_2/registries"
 	ns "github.com/zeozeozeo/minego/internal/protocol/java_protocol/net_structures"
 )
 
@@ -34,6 +34,12 @@ func newBuilder(bot *Bot) *Builder { return &Builder{bot: bot} }
 // Place selects a matching hotbar block, clicks a supporting face, and waits
 // for the server's authoritative block update at pos.
 func (b *Builder) Place(ctx context.Context, pos BlockPos, opt PlaceOptions) (PlaceResult, error) {
+	lease, err := b.bot.actions.acquire(ctx, controlView|controlHands, priorityExplicit)
+	if err != nil {
+		return PlaceResult{}, err
+	}
+	defer lease.Release()
+	ctx = lease.Context(ctx)
 	if opt.Reach <= 0 {
 		opt.Reach = 4.5
 	}

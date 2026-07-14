@@ -1,7 +1,7 @@
 package minego
 
 import (
-	"github.com/zeozeozeo/minego/internal/data/packets"
+	"github.com/zeozeozeo/minego/internal/data/versions/v26_2/packets"
 	jp "github.com/zeozeozeo/minego/internal/protocol/java_protocol"
 	ns "github.com/zeozeozeo/minego/internal/protocol/java_protocol/net_structures"
 	"testing"

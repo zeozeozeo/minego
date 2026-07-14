@@ -1,7 +1,8 @@
 # MineGo
 
 MineGo is a Go 1.25+ library for autonomous Minecraft Java Edition clients.
-This first version targets **Minecraft 26.2 / protocol 776 only** and includes
+The currently compiled packs target **Minecraft 26.1 / protocol 775** and
+**Minecraft 26.2 / protocol 776**, and include
 the protocol, authentication, generated registry data, world state, movement,
 pathfinding, and mining code in this repository. It has no go-mclib module
 dependency.
@@ -78,8 +79,13 @@ does not branch-mine hidden blocks.
 ## Version packs and generation
 
 `version.Pack` isolates protocol IDs, packet factories, registries, block states,
-and collision data. `versions.V26_2` is selected by default. A future version is
-added as another pack while the `Bot` and service APIs stay stable.
+and collision data. Applications select releases with a string such as
+`Version: "26.1"` or `Version: "26.2"`; the empty default probes server status and selects by protocol.
+`minego.SupportedVersions()` reports the packs actually compiled into the build,
+and unsupported servers return a typed error rather than trying guessed codecs.
+Regenerate one or more isolated data packs with `go run ./tools/mcgen -versions
+1.21.11,26.1,26.2`. Generation records a packet-adapter checklist next to each pack;
+data alone is deliberately not treated as connection support.
 
 Regenerate all official inputs and Go tables with:
 
@@ -96,7 +102,8 @@ used. See `docs/adding-a-version.md` for packet-schema changes.
 
 ## Current scope
 
-The inventory API covers synchronization, held-slot selection, mining-tool
+The committed [Mineflayer parity matrix](docs/mineflayer-parity.md) is the
+feature-completeness checklist. The inventory API currently covers synchronization, held-slot selection, mining-tool
 choice, and hotbar block placement. Container clicks, crafting, arbitrary
 inventory transactions, automated bridging and pillaring, Bedrock, Realms
 discovery, proxies, and server hosting are not part of this release.

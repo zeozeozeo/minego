@@ -36,15 +36,19 @@ type Bot struct {
 	chatSession                 ns.UUID
 	chatIndex                   atomic.Int32
 	respawning                  atomic.Bool
+	actions                     *actionCoordinator
+	servicesMu                  sync.RWMutex
+	services                    map[string]any
 
-	World     *World
-	Self      *Self
-	Entities  *Entities
-	Inventory *Inventory
-	Chat      *Chat
-	Navigator *Navigator
-	Miner     *Miner
-	Builder   *Builder
+	World         *World
+	Self          *Self
+	Entities      *Entities
+	Inventory     *Inventory
+	Chat          *Chat
+	Navigator     *Navigator
+	Miner         *Miner
+	Builder       *Builder
+	Observability *Observability
 
 	onDisconnect event[DisconnectEvent]
 	onPacket     event[RawPacket]
@@ -59,9 +63,6 @@ type RawPacket struct {
 func New(cfg Config) (*Bot, error) {
 	if cfg.Address == "" {
 		return nil, errors.New("minego: address is required")
-	}
-	if cfg.Version == nil {
-		cfg.Version = versions.V26_2
 	}
 	if cfg.Locale == "" {
 		cfg.Locale = "en_us"
@@ -84,7 +85,15 @@ func New(cfg Config) (*Bot, error) {
 	if cfg.Auth.Mode == AuthMicrosoft && cfg.Auth.ClientID == "" {
 		return nil, errors.New("minego: Microsoft client ID is required")
 	}
-	b := &Bot{cfg: cfg, pack: cfg.Version, client: jp.NewTCPClient(), done: make(chan struct{}), ready: make(chan struct{})}
+	var pack version.Pack
+	if cfg.Version != "" {
+		var ok bool
+		pack, ok = versions.ByName(cfg.Version)
+		if !ok {
+			return nil, &UnsupportedVersionError{Name: cfg.Version, Supported: SupportedVersions()}
+		}
+	}
+	b := &Bot{cfg: cfg, pack: pack, client: jp.NewTCPClient(), done: make(chan struct{}), ready: make(chan struct{}), actions: newActionCoordinator(), services: make(map[string]any)}
 	b.World = newWorld(b)
 	b.Self = newSelf()
 	b.Entities = newEntities()
@@ -93,10 +102,39 @@ func New(cfg Config) (*Bot, error) {
 	b.Navigator = newNavigator(b)
 	b.Miner = newMiner(b)
 	b.Builder = newBuilder(b)
+	b.Observability = newObservability(b)
+	for _, plugin := range cfg.Plugins {
+		if plugin == nil {
+			return nil, errors.New("minego: nil plugin")
+		}
+		if err := plugin.Register(&PluginContext{bot: b}); err != nil {
+			return nil, fmt.Errorf("register plugin: %w", err)
+		}
+	}
 	return b, nil
 }
 
-func (b *Bot) Version() version.Pack { return b.pack }
+// SupportedVersions reports the packs compiled into this build.
+func SupportedVersions() []version.Descriptor { return versions.Descriptors() }
+
+// Version reports the selected version. It is zero before Connect when
+// automatic detection was requested.
+func (b *Bot) Version() version.Descriptor {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.pack == nil {
+		return version.Descriptor{}
+	}
+	return b.pack.Descriptor()
+}
+func (b *Bot) Supports(feature version.Feature) bool { return b.Version().Supports(feature) }
+func (b *Bot) Require(feature version.Feature) error {
+	descriptor := b.Version()
+	if descriptor.Supports(feature) {
+		return nil
+	}
+	return &UnsupportedFeatureError{Feature: feature, Version: descriptor}
+}
 func (b *Bot) WaitReady(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
@@ -125,7 +163,13 @@ func (b *Bot) Close() error {
 	return err
 }
 func (b *Bot) block(pos BlockPos, id int32) (Block, bool) {
-	v, ok := b.pack.BlockByState(id)
+	b.mu.RLock()
+	pack := b.pack
+	b.mu.RUnlock()
+	if pack == nil {
+		return Block{}, false
+	}
+	v, ok := pack.BlockByState(id)
 	if !ok {
 		return Block{}, false
 	}
@@ -134,6 +178,19 @@ func (b *Bot) block(pos BlockPos, id int32) (Block, bool) {
 		boxes[i] = AABB{MinX: x.MinX, MinY: x.MinY, MinZ: x.MinZ, MaxX: x.MaxX, MaxY: x.MaxY, MaxZ: x.MaxZ}
 	}
 	return Block{Position: pos, Name: v.Name, StateID: v.StateID, Properties: v.Properties, Hardness: v.Hardness, RequiresCorrectTool: v.RequiresCorrectTool, Collision: boxes}, true
+}
+
+// HasBlock reports whether the selected version knows a block name. It is
+// false before automatic version detection completes.
+func (b *Bot) HasBlock(name string) bool {
+	b.mu.RLock()
+	pack := b.pack
+	b.mu.RUnlock()
+	if pack == nil {
+		return false
+	}
+	_, ok := pack.StateID(name, nil)
+	return ok
 }
 func (b *Bot) finish(ev DisconnectEvent) {
 	if b.cancel != nil {

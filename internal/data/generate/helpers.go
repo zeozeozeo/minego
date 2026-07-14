@@ -10,10 +10,11 @@ import (
 	"unicode"
 )
 
-// Protocol version info - update these when regenerating for a new Minecraft version
-const (
-	ProtocolVersion  = 776
-	MinecraftVersion = "26.2"
+// Protocol version info is supplied by mcgen for isolated releases. The
+// defaults preserve the checked-in 26.2 generation command.
+var (
+	ProtocolVersion  int32 = 776
+	MinecraftVersion       = "26.2"
 )
 
 // lowCountWarnings accumulates scrapers that produced implausibly few entries.

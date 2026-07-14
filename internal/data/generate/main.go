@@ -1,15 +1,34 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 )
 
 func main() {
-	baseDir := filepath.Dir(os.Args[0])
-	if len(os.Args) > 1 {
-		baseDir = os.Args[1]
+	input := flag.String("input", "", "directory containing Mojang report and dump inputs")
+	output := flag.String("output", "", "directory for generated version data")
+	decompiled := flag.String("decompiled", "", "directory containing extracted client data")
+	importRoot := flag.String("import-root", "", "Go import path of the generated data root")
+	gameVersion := flag.String("game-version", "", "Minecraft version represented by the inputs")
+	protocolVersion := flag.Int("protocol", 0, "Minecraft protocol version represented by the inputs")
+	flag.Parse()
+	if *gameVersion != "" {
+		MinecraftVersion = *gameVersion
+	}
+	if *protocolVersion > 0 {
+		ProtocolVersion = int32(*protocolVersion)
+	}
+
+	// Positional arguments remain supported for older local generation scripts.
+	baseDir := *input
+	if baseDir == "" {
+		baseDir = filepath.Dir(os.Args[0])
+		if flag.NArg() > 0 {
+			baseDir = flag.Arg(0)
+		}
 	}
 
 	// load JSON data
@@ -19,11 +38,20 @@ func main() {
 	packets := loadJSON[PacketsJSON](filepath.Join(baseDir, "packets.json"))
 	langPath := filepath.Join(baseDir, "en_us.json")
 
-	outDir := filepath.Dir(baseDir)
+	outDir := *output
+	if outDir == "" {
+		outDir = filepath.Dir(baseDir)
+	}
 	// decompiled sources live in the sibling go-mclib/mcsrc repo (../../../mcsrc relative to pkg/data)
-	decompiledDir := filepath.Join(outDir, "..", "..", "..", "mcsrc", "current")
-	if len(os.Args) > 2 {
-		decompiledDir = os.Args[2]
+	decompiledDir := *decompiled
+	if decompiledDir == "" {
+		decompiledDir = filepath.Join(outDir, "..", "..", "..", "mcsrc", "current")
+		if flag.NArg() > 1 {
+			decompiledDir = flag.Arg(1)
+		}
+	}
+	if *importRoot == "" {
+		*importRoot = "github.com/zeozeozeo/minego/internal/data"
 	}
 	itemTagsDir := filepath.Join(decompiledDir, "data", "minecraft", "tags", "item")
 	datapackDir := filepath.Join(decompiledDir, "data", "minecraft")
@@ -48,7 +76,7 @@ func main() {
 	generateLang(langPath, filepath.Join(outDir, "lang", "lang_gen.go"))
 	generateEntities(mcdumpEntities, filepath.Join(outDir, "entities", "entities_gen.go"))
 	generateEntityMetadata(filepath.Join(baseDir, "entity_metadata.include.json"), filepath.Join(outDir, "entities"))
-	generateBlockShapes(mcdumpBlocks, filepath.Join(outDir, "hitboxes", "blocks", "block_shapes_gen.go"))
+	generateBlockShapes(mcdumpBlocks, filepath.Join(outDir, "hitboxes", "blocks", "block_shapes_gen.go"), *importRoot)
 	generateEntityHitboxes(mcdumpEntities, filepath.Join(outDir, "hitboxes", "entities", "entity_hitboxes_gen.go"))
 	generateItemTags(itemTagsDir, registries, filepath.Join(outDir, "items", "tags_gen.go"))
 	generateRegistryData(datapackDir, filepath.Join(outDir, "registries", "registry_data_gen.go"))
