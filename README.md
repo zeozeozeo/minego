@@ -7,6 +7,8 @@ the protocol, authentication, generated registry data, world state, movement,
 pathfinding, and mining code in this repository. It has no go-mclib module
 dependency.
 
+[demo.webm](https://github.com/user-attachments/assets/bddff7a1-6c1b-4dc3-89c5-aa94579e7642)
+
 ## Connect and chat
 
 ```go
