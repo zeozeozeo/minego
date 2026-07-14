@@ -77,16 +77,12 @@ func (c *controller) mine(ctx context.Context, id uint64, name string) {
 func main() {
 	address := flag.String("address", "127.0.0.1:25565", "Minecraft server address")
 	username := flag.String("username", "MineGo", "offline-mode username")
-	// The example's current movement and interaction path uses the 26.2
-	// play-packet adapter. Keep it pinned until all gameplay services dispatch
-	// through the selected version pack.
-	gameVersion := flag.String("version", "26.2", "Minecraft protocol pack")
 	flag.Parse()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	bot, err := minego.New(minego.Config{Address: *address, Version: *gameVersion, Auth: minego.Offline(*username)})
+	bot, err := minego.New(minego.Config{Address: *address, Auth: minego.Offline(*username)})
 	if err != nil {
 		log.Fatal(err)
 	}

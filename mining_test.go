@@ -7,7 +7,7 @@ import (
 
 func TestBreakDuration(t *testing.T) {
 	b := Block{Hardness: 3, RequiresCorrectTool: true}
-	if d := breakDuration(b, 6, SelfState{Effects: map[int32]Effect{}}); d != 750*time.Millisecond {
+	if d := breakDuration(b, 6, SelfState{Effects: map[int32]Effect{}}); d != 800*time.Millisecond {
 		t.Fatalf("duration %v", d)
 	}
 }

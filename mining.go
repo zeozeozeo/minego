@@ -91,6 +91,12 @@ func newMiner(b *Bot) *Miner                               { return &Miner{bot: 
 func (m *Miner) OnProgress(fn func(MiningProgress)) func() { return m.onProgress.subscribe(fn) }
 
 func (m *Miner) Dig(ctx context.Context, pos BlockPos, opt DigOptions) (DigResult, error) {
+	lease, err := m.bot.actions.acquire(ctx, controlView|controlHands, priorityExplicit)
+	if err != nil {
+		return DigResult{}, err
+	}
+	defer lease.Release()
+	ctx = lease.Context(ctx)
 	if opt.Reach <= 0 {
 		opt.Reach = 4.5
 	}
@@ -434,7 +440,10 @@ func breakDuration(b Block, speed float64, s SelfState) time.Duration {
 	if e, ok := s.Effects[4]; ok {
 		seconds *= math.Pow(.3, float64(e.Amplifier+1))
 	}
-	ticks := math.Ceil(seconds * 20)
+	// The server applies destroy progress on tick boundaries. Keep mining for
+	// one extra tick so STOP_DESTROY_BLOCK cannot arrive before the final
+	// damage tick is credited.
+	ticks := math.Ceil(seconds*20) + 1
 	return time.Duration(ticks) * 50 * time.Millisecond
 }
 func nearestFace(eye, center Vec3) int {
