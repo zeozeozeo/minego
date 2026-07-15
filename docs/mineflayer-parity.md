@@ -6,7 +6,7 @@ integration coverage. `Partial` is usable but does not yet match the complete
 semantics. `Gated` means callers must check `Bot.Supports`. `Planned` is not a
 release claim.
 
-Last audited: 2026-07-14.
+Last audited: 2026-07-15.
 
 ## Connection and extensibility
 
@@ -40,8 +40,8 @@ advertise a pack until its packet schema and normalized adapters have tests.
 | blocks, chunks, block updates | `World.Block`, `LoadedChunks`, `OnBlockChange`, `OnChunkLoad` | Partial | Basic chunk lifecycle; searches, block entities, raycast API pending |
 | dimensions and respawn | `World.Dimension`, self state | Partial | Reset/respawn covered; dimension registry snapshot pending |
 | bot position, health, hunger, oxygen, XP | `Self.State` | Partial | Core fields tracked; effects/attributes and richer events pending |
-| players and entities | `Entities` | Partial | Spawn/move/remove basics; metadata, equipment, effects, vehicles pending |
-| inventory and held item | `Inventory.Slots`, `Selected`, `Select` | Partial | Synchronization and selection; authoritative window transactions pending |
+| players and entities | `Entities`, `Players` | Partial | Spawn/move/remove and tab-list identities; equipment, effects, vehicles pending |
+| inventory and held item | `Inventory.Slots`, `Window`, `Selected`, `Select` | Partial | Player/crafting windows and component snapshots; general container transfers pending |
 | chat/system messages | `Chat.OnMessage`, `Send`, `Command` | Partial | Signing supported; patterns, whispers, await, titles, completion pending |
 | time | `World.Time`, `World.OnTime` | Implemented | Immutable world-clock snapshots from `S2CSetTime` |
 | weather, tab list | — | Planned | No public service yet |
@@ -60,7 +60,7 @@ advertise a pack until its packet schema and normalized adapters have tests.
 | use/activate item, block, entity | — | Planned | Packet primitives exist but no stable service API |
 | attack/combat | — | Planned | No combat service yet |
 | equip, toss, transfer, click window | — | Planned | Requires transaction/state-ID layer |
-| crafting and recipes | — | Planned | Requires version-owned recipe data and windows |
+| crafting and recipes | `Crafter.RecipesFor`, `Craft`, `RegisterRecipe` | Partial | Generated vanilla shaped/shapeless recipes, recursive dependencies, 2x2/3x3 windows; custom server recipes and processing stations pending |
 | containers and furnaces | — | Planned | Requires authoritative windows |
 | enchanting, anvils, villagers | — | Planned | Requires authoritative windows |
 | beds, fishing, books, signs | — | Planned | No high-level API yet |
@@ -73,12 +73,13 @@ advertise a pack until its packet schema and normalized adapters have tests.
 | exact, near, adjacent goals | `GoalBlock`, `GoalNear`, `GoalAdjacent` | Implemented | Deterministic path tests |
 | walk, diagonal, jump, drop, sprint | `Navigator.Navigate` | Partial | Basic collision-aware execution implemented |
 | parkour, swimming, climbing, doors | navigation options/moves | Partial | Bounded forms; full simulation and hazards pending |
-| breaking during routes | `AllowBreaking` | Partial | Uses `Miner.Dig`; dependency-aware repair pending |
-| dynamic rerouting and correction | navigator executor | Partial | Full replans today; D*-Lite edge repair pending |
-| follow, explore, escape, composite goals | — | Planned | Goal/process APIs pending |
-| bridge and pillar | — | Planned | Placement primitive exists; process APIs pending |
-| blueprint building | — | Planned | Native `Blueprint` and importers pending |
-| incremental segmented planner | — | Planned | Current planner is bounded A* |
+| breaking during routes | `AllowBreaking` | Partial | Multi-block body clearance through `Miner.Dig`; hazard policy pending |
+| dynamic rerouting and correction | navigator executor | Partial | D*-Lite repairs relevant changed edges for standard goals; custom goals fall back to bounded A* |
+| follow, explore, escape, composite goals | `Follow`, `Explore` | Partial | Entity/player following and frontier exploration; escape/composite goals pending |
+| bridge and pillar | `AllowPlacing`, `TemporaryBlocks` | Partial | Allowlisted acquisition, bridge and jump-pillar actions; route blocks remain in place |
+| blueprint building | `Blueprint`, `FindSite`, `Build` | Partial | Relative blueprints, materials, obstruction handling and ordered placement; importers/orientation pending |
+| incremental segmented planner | navigator planner | Implemented | Retained D*-Lite state inside loaded segments with bounded A* frontier fallback |
+| elytra flight | `Elytra.Fly` | Partial | Automatic equipment, rockets, clearance correction and safe landing; durability policy and server soak pending |
 
 ## Event semantics
 

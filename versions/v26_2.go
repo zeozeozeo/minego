@@ -19,6 +19,7 @@ func (v26_2) Descriptor() version.Descriptor {
 		version.FeatureStatus, version.FeatureConfiguration, version.FeatureSignedChat,
 		version.FeatureRuntimeRegistry, version.FeatureWorld, version.FeatureInventory,
 		version.FeatureNavigation, version.FeatureMining, version.FeatureBuilding,
+		version.FeatureCrafting, version.FeatureElytra,
 	)
 }
 func (v26_2) Name() string    { return "26.2" }

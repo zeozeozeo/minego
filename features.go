@@ -15,4 +15,6 @@ const (
 	FeatureNavigation      = version.FeatureNavigation
 	FeatureMining          = version.FeatureMining
 	FeatureBuilding        = version.FeatureBuilding
+	FeatureCrafting        = version.FeatureCrafting
+	FeatureElytra          = version.FeatureElytra
 )

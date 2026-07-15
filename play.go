@@ -133,6 +133,26 @@ func (b *Bot) handlePlay(w *jp.WirePacket) error {
 		return b.handleInventoryContent(w)
 	case packet_ids.S2CContainerSetSlotID:
 		return b.handleInventorySlot(w)
+	case packet_ids.S2COpenScreenID:
+		var p packets.S2COpenScreen
+		if err := w.ReadInto(&p); err != nil {
+			return err
+		}
+		b.Inventory.mu.Lock()
+		b.Inventory.window = WindowSnapshot{ID: int32(p.WindowId), Type: int32(p.WindowType), Title: p.WindowTitle.Render(lang.Translate)}
+		snapshot := cloneWindow(b.Inventory.window)
+		b.Inventory.mu.Unlock()
+		b.Inventory.onWindow.emit(WindowChange{Window: snapshot})
+	case packet_ids.S2CContainerCloseID:
+		var p packets.S2CContainerClose
+		if err := w.ReadInto(&p); err != nil {
+			return err
+		}
+		b.Inventory.mu.Lock()
+		b.Inventory.window = WindowSnapshot{}
+		snapshot := cloneWindow(b.Inventory.window)
+		b.Inventory.mu.Unlock()
+		b.Inventory.onWindow.emit(WindowChange{Window: snapshot})
 	case packet_ids.S2CSetHeldSlotID:
 		var p packets.S2CSetHeldSlot
 		if err := w.ReadInto(&p); err != nil {
@@ -142,6 +162,12 @@ func (b *Bot) handlePlay(w *jp.WirePacket) error {
 		b.Inventory.selected = int(p.Slot)
 		b.Inventory.mu.Unlock()
 		b.Self.update(func(s *SelfState) { s.SelectedSlot = int(p.Slot) })
+	case packet_ids.S2CPlayerInfoUpdateID:
+		// This packet's action-bitset shape is not expressible by the generic
+		// packet generator, so the stable Players service decodes its payload.
+		_ = b.Players.decodeUpdate(w.Data)
+	case packet_ids.S2CPlayerInfoRemoveID:
+		_ = b.Players.decodeRemove(w.Data)
 	case packet_ids.S2CSystemChatID:
 		var p packets.S2CSystemChat
 		if err := w.ReadInto(&p); err != nil {
@@ -321,6 +347,7 @@ func (b *Bot) handleAddEntity(w *jp.WirePacket) error {
 	b.Entities.mu.Lock()
 	b.Entities.values[e.ID] = e
 	b.Entities.mu.Unlock()
+	b.Players.linkEntity(e)
 	b.entityChange("add", e)
 	return nil
 }
@@ -423,22 +450,36 @@ func (b *Bot) handleRemoveEntities(w *jp.WirePacket) error {
 	return nil
 }
 
-func fromSlot(s ns.Slot) ItemStack { return stack(int32(s.ItemID), int32(s.Count)) }
 func (b *Bot) handleInventoryContent(w *jp.WirePacket) error {
 	var p packets.S2CContainerSetContent
 	if err := w.ReadInto(&p); err != nil {
 		return err
 	}
-	if p.WindowId != 0 {
-		return nil
-	}
 	slots := make([]ItemStack, len(p.Slots))
 	for i, s := range p.Slots {
-		slots[i] = fromSlot(s)
+		slots[i] = fromNetSlot(s)
 	}
 	b.Inventory.mu.Lock()
-	b.Inventory.slots = slots
+	if p.WindowId == 0 {
+		b.Inventory.slots = slots
+	}
+	if int32(p.WindowId) == b.Inventory.window.ID {
+		b.Inventory.window.ID = int32(p.WindowId)
+		b.Inventory.window.StateID = int32(p.StateId)
+		b.Inventory.window.Slots = slots
+		b.Inventory.window.Carried = fromNetSlot(p.CarriedItem)
+	}
+	if int32(p.WindowId) == b.Inventory.window.ID && b.Inventory.window.Type == 12 && len(slots) >= 46 {
+		for source := 10; source < 46; source++ {
+			destination := source - 1
+			if destination < len(b.Inventory.slots) {
+				b.Inventory.slots[destination] = cloneStack(slots[source])
+			}
+		}
+	}
+	snapshot := cloneWindow(b.Inventory.window)
 	b.Inventory.mu.Unlock()
+	b.Inventory.onWindow.emit(WindowChange{Window: snapshot})
 	return nil
 }
 func (b *Bot) handleInventorySlot(w *jp.WirePacket) error {
@@ -446,14 +487,31 @@ func (b *Bot) handleInventorySlot(w *jp.WirePacket) error {
 	if err := w.ReadInto(&p); err != nil {
 		return err
 	}
-	if p.WindowId != 0 {
-		return nil
-	}
 	idx := int(p.Slot)
 	b.Inventory.mu.Lock()
-	if idx >= 0 && idx < len(b.Inventory.slots) {
-		b.Inventory.slots[idx] = fromSlot(p.SlotData)
+	if p.WindowId == 0 && idx >= 0 && idx < len(b.Inventory.slots) {
+		b.Inventory.slots[idx] = fromNetSlot(p.SlotData)
 	}
+	if int32(p.WindowId) == b.Inventory.window.ID {
+		b.Inventory.window.StateID = int32(p.StateId)
+		if idx >= 0 && idx < len(b.Inventory.window.Slots) {
+			b.Inventory.window.Slots[idx] = fromNetSlot(p.SlotData)
+		}
+		if idx == -1 {
+			b.Inventory.window.Carried = fromNetSlot(p.SlotData)
+		}
+		if b.Inventory.window.Type == 12 && idx >= 10 && idx < 46 {
+			destination := idx - 1
+			if destination < len(b.Inventory.slots) {
+				b.Inventory.slots[destination] = fromNetSlot(p.SlotData)
+			}
+		}
+	}
+	if int32(p.WindowId) == -1 && idx == -1 {
+		b.Inventory.window.Carried = fromNetSlot(p.SlotData)
+	}
+	snapshot := cloneWindow(b.Inventory.window)
 	b.Inventory.mu.Unlock()
+	b.Inventory.onWindow.emit(WindowChange{Window: snapshot})
 	return nil
 }

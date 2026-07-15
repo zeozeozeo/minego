@@ -230,3 +230,58 @@ func TestPhysicsSprintJumpCrossesTwoBlockGap(t *testing.T) {
 		t.Fatalf("sprint jump failed to cross gap: %#v", state)
 	}
 }
+
+func TestBridgeAndTwoBlockDigActions(t *testing.T) {
+	b := syntheticBot(t)
+	air, _ := b.pack.StateID("minecraft:air", nil)
+	stone, _ := b.pack.StateID("minecraft:stone", nil)
+	b.World.chunks[chunkKey{0, 0}].SetBlockState(2, 63, 1, air)
+	move, _, ok := b.Navigator.passable(BlockPos{2, 64, 1}, NavigationOptions{AllowPlacing: true})
+	if !ok || move != MoveBridge {
+		t.Fatalf("expected bridge edge, got move=%v ok=%t", move, ok)
+	}
+	node := b.Navigator.pathNode(BlockPos{2, 64, 1}, move, 4)
+	if len(node.Place) != 1 || node.Place[0] != (BlockPos{2, 63, 1}) {
+		t.Fatalf("unexpected bridge action: %#v", node)
+	}
+	b.World.chunks[chunkKey{0, 0}].SetBlockState(2, 63, 1, stone)
+	b.World.chunks[chunkKey{0, 0}].SetBlockState(2, 64, 1, stone)
+	b.World.chunks[chunkKey{0, 0}].SetBlockState(2, 65, 1, stone)
+	move, _, ok = b.Navigator.passable(BlockPos{2, 64, 1}, NavigationOptions{AllowBreaking: true})
+	if !ok || move != MoveBreak {
+		t.Fatalf("expected break edge, got move=%v ok=%t", move, ok)
+	}
+	node = b.Navigator.pathNode(BlockPos{2, 64, 1}, move, 4)
+	if len(node.Break) != 2 {
+		t.Fatalf("expected feet and head dig actions, got %#v", node.Break)
+	}
+}
+
+func TestDStarRepairsChangedEdge(t *testing.T) {
+	b := syntheticBot(t)
+	start := BlockPos{1, 64, 1}
+	goal := GoalBlock(BlockPos{5, 64, 1})
+	planner, ok := b.Navigator.newDStar(start, goal, defaultsNav(NavigationOptions{MaxNodes: 5000}))
+	if !ok {
+		t.Fatal("standard goal did not create D* planner")
+	}
+	path, _, err := planner.Plan()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(path) < 2 {
+		t.Fatalf("short path: %#v", path)
+	}
+	stone, _ := b.pack.StateID("minecraft:stone", nil)
+	changed := BlockPos{3, 64, 1}
+	b.World.chunks[chunkKey{0, 0}].SetBlockState(changed.X, changed.Y, changed.Z, stone)
+	repaired, _, err := planner.Repair(start, []BlockPos{changed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range repaired {
+		if node.Position == changed {
+			t.Fatalf("repaired path retained blocked edge: %#v", repaired)
+		}
+	}
+}

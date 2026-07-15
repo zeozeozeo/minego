@@ -63,6 +63,7 @@ type MineResult struct {
 	Status               MineStatus
 	Requested, Completed int
 	Mined                []BlockPos
+	Blocks               []Block
 	ExploredChunks       int
 }
 
@@ -229,6 +230,7 @@ func (m *Miner) Mine(ctx context.Context, selector Selector, count int, opt Mine
 			}
 			result.Completed++
 			result.Mined = append(result.Mined, target.Position)
+			result.Blocks = append(result.Blocks, target)
 			m.onProgress.emit(MiningProgress{Kind: "target", Position: target.Position, Completed: result.Completed, Requested: count})
 			mined = true
 			break

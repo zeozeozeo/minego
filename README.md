@@ -63,6 +63,11 @@ placed, err := bot.Builder.Place(ctx,
     minego.BlockPos{X: 10, Y: 64, Z: 10},
     minego.PlaceOptions{Item: "cobblestone"},
 )
+
+err = bot.Navigator.Follow(ctx,
+    minego.FollowTarget{PlayerName: "Steve"},
+    minego.FollowOptions{Distance: 3},
+)
 ```
 
 Navigation uses loaded authoritative block states and emits ordinary 20 Hz
@@ -75,6 +80,32 @@ replaceability, line of sight, and a supporting face, then waits for the
 authoritative block update. Navigation never teleports the bot. Exploratory
 mining walks toward safe loaded-chunk frontiers to reveal normal terrain; it
 does not branch-mine hidden blocks.
+
+With `AllowBreaking` and `AllowPlacing`, route nodes may dig both body cells,
+bridge gaps, or pillar upward. `TemporaryBlocks` restricts usable materials;
+`AcquireTemporary` can mine an allowlisted block before executing a route that
+is short on scaffolding. Long routes are split at safe loaded-chunk frontiers,
+and unrelated block updates do not trigger a repair. `Navigator.Follow`
+accepts entity IDs, player UUIDs, or tab-list names, while
+`Navigator.Explore` exposes bounded frontier exploration.
+
+## Crafting, elytra, and blueprints
+
+`Bot.Crafter` provides generated vanilla shaped and shapeless recipes,
+recursive dependency resolution, inventory 2x2 crafting, and authoritative
+crafting-table windows. Pass a table position for 3x3 recipes:
+
+```go
+table := minego.BlockPos{X: 12, Y: 64, Z: 8}
+_, err := bot.Crafter.Craft(ctx, "oak_door", 1,
+    minego.CraftOptions{Table: &table, Recursive: true})
+```
+
+`Bot.Elytra.Fly` handles equipment, launch, rockets, clearance correction, and
+a safe landing near a standard block goal. `Builder.FindSite`,
+`Builder.Materials`, and `Builder.Build` support reusable relative blueprints.
+The `examples/wood-house` program mines any log family, crafts matching
+materials using both grid sizes, finds a clear site, and builds a 7x7 house.
 
 ## Version packs and generation
 
@@ -103,7 +134,8 @@ used. See `docs/adding-a-version.md` for packet-schema changes.
 ## Current scope
 
 The committed [Mineflayer parity matrix](docs/mineflayer-parity.md) is the
-feature-completeness checklist. The inventory API currently covers synchronization, held-slot selection, mining-tool
-choice, and hotbar block placement. Container clicks, crafting, arbitrary
-inventory transactions, automated bridging and pillaring, Bedrock, Realms
-discovery, proxies, and server hosting are not part of this release.
+feature-completeness checklist. The inventory API covers player and crafting
+window synchronization, held-slot selection, crafting transactions,
+mining-tool choice, and hotbar block placement. General container transfers,
+furnace processing, custom server recipe discovery, Bedrock, Realms discovery,
+proxies, and server hosting are not part of this release.

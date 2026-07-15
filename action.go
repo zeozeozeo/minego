@@ -30,10 +30,17 @@ type actionLease struct {
 	cancel      context.CancelFunc
 	done        chan struct{}
 	once        sync.Once
+	borrowed    bool
 }
 
+type actionLeaseContextKey struct{}
+
 func (l *actionLease) Context(parent context.Context) context.Context {
+	if l.borrowed {
+		return parent
+	}
 	ctx, cancel := context.WithCancel(parent)
+	ctx = context.WithValue(ctx, actionLeaseContextKey{}, l)
 	go func() {
 		select {
 		case <-l.done:
@@ -45,6 +52,9 @@ func (l *actionLease) Context(parent context.Context) context.Context {
 }
 
 func (l *actionLease) Release() {
+	if l.borrowed {
+		return
+	}
 	l.once.Do(func() {
 		l.cancel()
 		close(l.done)
@@ -65,6 +75,12 @@ func newActionCoordinator() *actionCoordinator {
 // acquire atomically claims all controls. Higher-priority actions preempt every
 // conflicting lower-priority lease; otherwise acquisition waits for release.
 func (c *actionCoordinator) acquire(ctx context.Context, controls actionControl, priority actionPriority) (*actionLease, error) {
+	// Compound actions (navigation digging or placing, crafting while moving to
+	// a table) borrow their parent's controls. This prevents a child operation
+	// from preempting and cancelling the process that invoked it.
+	if parent, ok := ctx.Value(actionLeaseContextKey{}).(*actionLease); ok && parent.controls&controls == controls {
+		return &actionLease{controls: controls, priority: parent.priority, borrowed: true}, nil
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err

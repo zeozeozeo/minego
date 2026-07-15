@@ -19,6 +19,7 @@ type SelfState struct {
 	Saturation   float32
 	GameMode     uint8
 	SelectedSlot int
+	Flying       bool
 	Effects      map[int32]Effect
 }
 type Self struct {

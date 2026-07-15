@@ -7,6 +7,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/zeozeozeo/minego/internal/data/versions/v26_2/packets"
 	ns "github.com/zeozeozeo/minego/internal/protocol/java_protocol/net_structures"
@@ -15,6 +16,31 @@ import (
 type Goal interface {
 	Reached(BlockPos) bool
 	Estimate(BlockPos) float64
+}
+
+type FollowTarget struct {
+	EntityID   int32
+	PlayerUUID string
+	PlayerName string
+}
+
+type FollowOptions struct {
+	Distance       float64
+	RepathDistance float64
+	LostTimeout    time.Duration
+	Navigation     NavigationOptions
+}
+
+type ExploreOptions struct {
+	Origin     BlockPos
+	Radius     int
+	ChunkLimit int
+	Navigation NavigationOptions
+}
+
+type ExploreResult struct {
+	Chunks    int
+	Frontiers []BlockPos
 }
 type GoalBlock BlockPos
 
@@ -44,7 +70,14 @@ type NavigationOptions struct {
 	AllowParkour  bool
 	MaxParkourGap int
 	AllowBreaking bool
-	Avoid         []string
+	AllowPlacing  bool
+	// TemporaryBlocks lists block items that may be used for route bridges.
+	// Names without a namespace are treated as minecraft names.
+	TemporaryBlocks []string
+	// AcquireTemporary permits mining a TemporaryBlock when the inventory is
+	// short before route execution.
+	AcquireTemporary bool
+	Avoid            []string
 }
 type MoveKind uint8
 
@@ -57,12 +90,16 @@ const (
 	MoveDoor
 	MoveBreak
 	MoveParkour
+	MoveBridge
+	MovePillar
 )
 
 type PathNode struct {
 	Position BlockPos
 	Move     MoveKind
 	Cost     float64
+	Break    []BlockPos
+	Place    []BlockPos
 }
 type PathProgress struct {
 	Index, Total int
@@ -72,8 +109,11 @@ type PathProgress struct {
 	Move         MoveKind
 }
 type NavigationResult struct {
-	Path    []PathNode
-	Replans int
+	Path     []PathNode
+	Replans  int
+	Repairs  int
+	Segments int
+	Expanded int
 }
 
 type navRun struct {
@@ -89,6 +129,10 @@ type navRun struct {
 	stalled      int
 	actionIndex  int
 	digging      bool
+	pillaring    bool
+	replanned    bool
+	planner      *dstarPlanner
+	changes      []BlockPos
 	jumpIndex    int
 }
 type Navigator struct {
@@ -101,10 +145,18 @@ type Navigator struct {
 
 func newNavigator(b *Bot) *Navigator {
 	n := &Navigator{bot: b}
-	b.World.OnBlockChange(func(BlockChange) {
+	b.World.OnBlockChange(func(change BlockChange) {
 		n.mu.Lock()
 		if n.active != nil {
-			n.active.dirty = true
+			for i := n.active.index; i < len(n.active.path); i++ {
+				p := n.active.path[i].Position
+				if abs(p.X-change.Position.X) <= 2 && abs(p.Y-change.Position.Y) <= 2 && abs(p.Z-change.Position.Z) <= 2 {
+					n.active.dirty = true
+					n.active.result.Repairs++
+					n.active.changes = append(n.active.changes, change.Position)
+					break
+				}
+			}
 		}
 		n.mu.Unlock()
 	})
@@ -115,8 +167,130 @@ func (n *Navigator) Stop()                                   { n.finish(context.
 func (n *Navigator) Path(start BlockPos, goal Goal, opt NavigationOptions) ([]PathNode, error) {
 	return n.findPath(start, goal, defaultsNav(opt))
 }
+
+// Follow keeps the bot within Distance of a moving entity until ctx is
+// cancelled. Player names and UUIDs are resolved through Bot.Players.
+func (n *Navigator) Follow(ctx context.Context, target FollowTarget, opt FollowOptions) error {
+	if opt.Distance <= 0 {
+		opt.Distance = 2
+	}
+	if opt.RepathDistance <= 0 {
+		opt.RepathDistance = 1.5
+	}
+	if opt.LostTimeout <= 0 {
+		opt.LostTimeout = 10 * time.Second
+	}
+	changes := make(chan struct{}, 1)
+	unsub := n.bot.Entities.OnChange(func(EntityChange) {
+		select {
+		case changes <- struct{}{}:
+		default:
+		}
+	})
+	defer unsub()
+	var lostSince time.Time
+	for {
+		entity, ok := n.followEntity(target)
+		if !ok {
+			if lostSince.IsZero() {
+				lostSince = time.Now()
+			}
+			if time.Since(lostSince) >= opt.LostTimeout {
+				return ErrTargetLost
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-changes:
+				continue
+			case <-time.After(100 * time.Millisecond):
+				continue
+			}
+		}
+		lostSince = time.Time{}
+		if _, err := n.Navigate(ctx, GoalNear{Position: entity.Position.Block(), Radius: opt.Distance}, opt.Navigation); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
+		start := entity.Position
+		for {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-changes:
+				current, found := n.followEntity(target)
+				if !found || current.Position.Distance(start) >= opt.RepathDistance {
+					goto replan
+				}
+			}
+		}
+	replan:
+	}
+}
+
+func (n *Navigator) followEntity(target FollowTarget) (Entity, bool) {
+	if target.PlayerName != "" || target.PlayerUUID != "" {
+		if n.bot.Players != nil {
+			player, ok := n.bot.Players.find(target.PlayerName, target.PlayerUUID)
+			if ok && player.EntityID != 0 {
+				return n.bot.Entities.Get(player.EntityID)
+			}
+		}
+		if target.PlayerUUID != "" {
+			for _, entity := range n.bot.Entities.All() {
+				if entity.UUID == target.PlayerUUID {
+					return entity, true
+				}
+			}
+		}
+		return Entity{}, false
+	}
+	return n.bot.Entities.Get(target.EntityID)
+}
+
+// Explore walks loaded terrain frontiers until ChunkLimit new chunks have
+// appeared, the radius is exhausted, or ctx is cancelled.
+func (n *Navigator) Explore(ctx context.Context, opt ExploreOptions) (ExploreResult, error) {
+	if opt.Radius <= 0 {
+		opt.Radius = 256
+	}
+	if opt.ChunkLimit <= 0 {
+		opt.ChunkLimit = 1
+	}
+	if opt.Origin == (BlockPos{}) {
+		opt.Origin = n.bot.Self.State().Position.Block()
+	}
+	result := ExploreResult{}
+	for result.Chunks < opt.ChunkLimit {
+		frontier, ok := n.bot.Miner.frontier(opt.Origin, opt.Radius)
+		if !ok {
+			return result, ErrSearchExhausted
+		}
+		before := len(n.bot.World.LoadedChunks())
+		if _, err := n.Navigate(ctx, GoalNear{Position: frontier, Radius: 2}, opt.Navigation); err != nil {
+			return result, err
+		}
+		deadline := time.NewTimer(3 * time.Second)
+		for len(n.bot.World.LoadedChunks()) <= before {
+			select {
+			case <-ctx.Done():
+				deadline.Stop()
+				return result, ctx.Err()
+			case <-deadline.C:
+				return result, ErrSearchExhausted
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+		deadline.Stop()
+		result.Chunks += len(n.bot.World.LoadedChunks()) - before
+		result.Frontiers = append(result.Frontiers, frontier)
+	}
+	return result, nil
+}
 func (n *Navigator) Navigate(ctx context.Context, goal Goal, opt NavigationOptions) (NavigationResult, error) {
-	lease, err := n.bot.actions.acquire(ctx, controlMovement|controlView, priorityAutomation)
+	lease, err := n.bot.actions.acquire(ctx, controlMovement|controlView|controlHands|controlInventory, priorityAutomation)
 	if err != nil {
 		return NavigationResult{}, err
 	}
@@ -124,11 +298,27 @@ func (n *Navigator) Navigate(ctx context.Context, goal Goal, opt NavigationOptio
 	ctx = lease.Context(ctx)
 	opt = defaultsNav(opt)
 	start := n.bot.Self.State().Position.Block()
-	path, err := n.findPath(start, goal, opt)
+	path, segmented, expanded, planner, err := n.planRoute(start, goal, opt)
 	if err != nil {
 		return NavigationResult{}, err
 	}
-	run := &navRun{ctx: ctx, goal: goal, options: opt, path: path, index: 1, done: make(chan error, 1), result: NavigationResult{Path: path}, lastDistance: math.MaxFloat64, jumpIndex: -1}
+	if err := n.ensureTemporary(ctx, path, opt); err != nil {
+		return NavigationResult{}, err
+	}
+	// Acquiring route material may move the bot and change the graph.
+	newStart := n.bot.Self.State().Position.Block()
+	expandedAgain := 0
+	if newStart != start {
+		path, segmented, expandedAgain, planner, err = n.planRoute(newStart, goal, opt)
+		if err != nil {
+			return NavigationResult{}, err
+		}
+	}
+	result := NavigationResult{Path: path, Expanded: expanded + expandedAgain}
+	if segmented {
+		result.Segments = 1
+	}
+	run := &navRun{ctx: ctx, goal: goal, options: opt, path: path, index: 1, done: make(chan error, 1), result: result, lastDistance: math.MaxFloat64, jumpIndex: -1, planner: planner}
 	n.mu.Lock()
 	if n.active != nil {
 		n.active.done <- context.Canceled
@@ -158,7 +348,65 @@ func defaultsNav(o NavigationOptions) NavigationOptions {
 	if o.AllowParkour && o.MaxParkourGap <= 0 {
 		o.MaxParkourGap = 2
 	}
+	if o.AllowPlacing && len(o.TemporaryBlocks) == 0 {
+		o.TemporaryBlocks = []string{"minecraft:dirt", "minecraft:cobblestone"}
+	}
+	for i, name := range o.TemporaryBlocks {
+		if !strings.Contains(name, ":") {
+			o.TemporaryBlocks[i] = "minecraft:" + name
+		}
+	}
 	return o
+}
+
+func (n *Navigator) ensureTemporary(ctx context.Context, path []PathNode, opt NavigationOptions) error {
+	need := 0
+	for _, node := range path {
+		need += len(node.Place)
+	}
+	if need == 0 {
+		return nil
+	}
+	have := 0
+	allowed := make(map[string]bool, len(opt.TemporaryBlocks))
+	for _, name := range opt.TemporaryBlocks {
+		allowed[name] = true
+	}
+	for _, stack := range n.bot.Inventory.Slots() {
+		if allowed[stack.Name] {
+			have += int(stack.Count)
+		}
+	}
+	if have >= need {
+		return nil
+	}
+	if !opt.AcquireTemporary {
+		return fmt.Errorf("%w: need %d route blocks, have %d", ErrNoTemporaryBlocks, need, have)
+	}
+	_, err := n.bot.Miner.Mine(ctx, Blocks(opt.TemporaryBlocks...), need-have, MineOptions{Navigation: NavigationOptions{AllowBreaking: opt.AllowBreaking}})
+	if err != nil {
+		return fmt.Errorf("acquire route blocks: %w", err)
+	}
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for {
+		collected := 0
+		for _, stack := range n.bot.Inventory.Slots() {
+			if allowed[stack.Name] {
+				collected += int(stack.Count)
+			}
+		}
+		if collected >= need {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return fmt.Errorf("%w: mined route material was not collected", ErrNoTemporaryBlocks)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
 func (n *Navigator) finish(err error) {
 	n.mu.Lock()
@@ -202,7 +450,20 @@ func (n *Navigator) tick() {
 		return
 	}
 	if r.dirty || r.index >= len(r.path) {
-		path, err := n.findPath(at, r.goal, r.options)
+		var path []PathNode
+		var segmented bool
+		var expanded int
+		var planner *dstarPlanner
+		var err error
+		if r.planner != nil && len(r.changes) > 0 {
+			path, expanded, err = r.planner.Repair(at, r.changes)
+			planner = r.planner
+			if err != nil {
+				path, segmented, expanded, planner, err = n.planRoute(at, r.goal, r.options)
+			}
+		} else {
+			path, segmented, expanded, planner, err = n.planRoute(at, r.goal, r.options)
+		}
 		if err != nil {
 			n.active = nil
 			n.mu.Unlock()
@@ -213,25 +474,94 @@ func (n *Navigator) tick() {
 		r.result.Path = path
 		r.index = 1
 		r.result.Replans++
+		r.result.Expanded += expanded
+		r.replanned = true
+		if segmented {
+			r.result.Segments++
+		}
 		r.dirty = false
+		r.changes = nil
+		r.planner = planner
 	}
 	if r.index >= len(r.path) {
 		n.mu.Unlock()
 		return
 	}
 	target := r.path[r.index]
-	if target.Move == MoveBreak && !r.digging {
+	if len(target.Break) > 0 && !r.digging {
 		r.digging = true
 		idx := r.index
+		breaks := append([]BlockPos(nil), target.Break...)
 		n.mu.Unlock()
 		go func() {
-			_, err := n.bot.Miner.Dig(r.ctx, target.Position, DigOptions{})
+			var err error
+			for _, pos := range breaks {
+				if _, err = n.bot.Miner.Dig(r.ctx, pos, DigOptions{}); err != nil {
+					break
+				}
+			}
 			n.mu.Lock()
 			defer n.mu.Unlock()
 			if n.active != r {
 				return
 			}
 			r.digging = false
+			if err != nil {
+				n.active = nil
+				r.done <- err
+				return
+			}
+			if r.index == idx {
+				r.dirty = true
+			}
+		}()
+		n.move(physicsInput{}, state)
+		return
+	}
+	if r.digging {
+		n.mu.Unlock()
+		n.move(physicsInput{Jump: r.pillaring}, state)
+		return
+	}
+	if len(target.Place) > 0 && r.actionIndex != r.index {
+		r.actionIndex = r.index
+		r.digging = true
+		r.pillaring = target.Move == MovePillar
+		idx := r.index
+		places := append([]BlockPos(nil), target.Place...)
+		n.mu.Unlock()
+		go func() {
+			var err error
+			if target.Move == MovePillar {
+				select {
+				case <-r.ctx.Done():
+					err = r.ctx.Err()
+				case <-time.After(300 * time.Millisecond):
+				}
+			}
+			for _, pos := range places {
+				item := ""
+				for _, candidate := range r.options.TemporaryBlocks {
+					if _, _, e := n.bot.Builder.placementItem(candidate); e == nil {
+						item = candidate
+						break
+					}
+				}
+				if item == "" {
+					err = ErrNoTemporaryBlocks
+					break
+				}
+				if _, err = n.bot.Builder.Place(r.ctx, pos, PlaceOptions{Item: item}); err != nil {
+					break
+				}
+			}
+			n.mu.Lock()
+			defer n.mu.Unlock()
+			if n.active != r {
+				return
+			}
+			r.digging = false
+			r.pillaring = false
 			if err != nil {
 				n.active = nil
 				r.done <- err
@@ -255,7 +585,8 @@ func (n *Navigator) tick() {
 	if dist < .18 && math.Abs(state.Position.Y-float64(target.Position.Y)) < .55 {
 		r.index++
 		n.mu.Unlock()
-		progress := PathProgress{Index: r.index, Total: len(r.path), Position: state.Position}
+		progress := PathProgress{Index: r.index, Total: len(r.path), Position: state.Position, Replanned: r.replanned}
+		r.replanned = false
 		if r.index < len(r.path) {
 			progress.Target, progress.Move = r.path[r.index].Position, r.path[r.index].Move
 		}
@@ -369,6 +700,10 @@ func (h pathHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
 func (h *pathHeap) Push(x any)        { *h = append(*h, x.(*pathEntry)) }
 func (h *pathHeap) Pop() any          { o := *h; x := o[len(o)-1]; *h = o[:len(o)-1]; return x }
 func (n *Navigator) findPath(start BlockPos, goal Goal, opt NavigationOptions) ([]PathNode, error) {
+	path, _, err := n.findPathCount(start, goal, opt)
+	return path, err
+}
+func (n *Navigator) findPathCount(start BlockPos, goal Goal, opt NavigationOptions) ([]PathNode, int, error) {
 	open := &pathHeap{}
 	heap.Init(open)
 	root := &pathEntry{pos: start, f: goal.Estimate(start)}
@@ -378,11 +713,11 @@ func (n *Navigator) findPath(start BlockPos, goal Goal, opt NavigationOptions) (
 	for open.Len() > 0 {
 		cur := heap.Pop(open).(*pathEntry)
 		if goal.Reached(cur.pos) {
-			return buildPath(cur), nil
+			return buildPath(cur), explored, nil
 		}
 		explored++
 		if explored > opt.MaxNodes {
-			return nil, fmt.Errorf("%w: node limit %d", ErrUnreachable, opt.MaxNodes)
+			return nil, explored, fmt.Errorf("%w: node limit %d", ErrUnreachable, opt.MaxNodes)
 		}
 		for _, next := range n.neighbors(cur.pos, opt) {
 			g := cur.g + next.Cost
@@ -393,12 +728,72 @@ func (n *Navigator) findPath(start BlockPos, goal Goal, opt NavigationOptions) (
 			heap.Push(open, &pathEntry{pos: next.Position, g: g, f: g + goal.Estimate(next.Position), move: next.Move, parent: cur})
 		}
 	}
-	return nil, ErrUnreachable
+	return nil, explored, ErrUnreachable
+}
+
+// planPath falls back to a safe loaded-chunk frontier when the final goal is
+// outside the known graph. Execution replans from that frontier as chunks
+// arrive, bounding search memory and latency for long trips.
+func (n *Navigator) planPath(start BlockPos, goal Goal, opt NavigationOptions) ([]PathNode, bool, int, error) {
+	path, expanded, err := n.findPathCount(start, goal, opt)
+	if err == nil {
+		return path, false, expanded, nil
+	}
+	frontier, ok := n.segmentFrontier(start, goal)
+	if !ok {
+		return nil, false, expanded, err
+	}
+	path, segmentExpanded, segmentErr := n.findPathCount(start, GoalNear{Position: frontier, Radius: 2}, opt)
+	if segmentErr != nil {
+		return nil, false, expanded + segmentExpanded, err
+	}
+	return path, true, expanded + segmentExpanded, nil
+}
+func (n *Navigator) planRoute(start BlockPos, goal Goal, opt NavigationOptions) ([]PathNode, bool, int, *dstarPlanner, error) {
+	if planner, ok := n.newDStar(start, goal, opt); ok {
+		path, expanded, err := planner.Plan()
+		if err == nil {
+			return path, false, expanded, planner, nil
+		}
+	}
+	path, segmented, expanded, err := n.planPath(start, goal, opt)
+	return path, segmented, expanded, nil, err
+}
+func (n *Navigator) segmentFrontier(start BlockPos, goal Goal) (BlockPos, bool) {
+	chunks := n.bot.World.LoadedChunks()
+	loaded := make(map[[2]int32]bool, len(chunks))
+	for _, c := range chunks {
+		loaded[c] = true
+	}
+	best := math.MaxFloat64
+	var result BlockPos
+	found := false
+	for _, c := range chunks {
+		for _, d := range [][2]int32{{1, 0}, {-1, 0}, {0, 1}, {0, -1}} {
+			if loaded[[2]int32{c[0] + d[0], c[1] + d[1]}] {
+				continue
+			}
+			x, z := int(c[0]*16+8+d[0]*7), int(c[1]*16+8+d[1]*7)
+			for y := 319; y >= -63; y-- {
+				p := BlockPos{x, y, z}
+				if _, _, ok := n.passable(p, NavigationOptions{}); ok {
+					score := goal.Estimate(p)
+					if distance(start, p) > 3 && score < best {
+						best = score
+						result = p
+						found = true
+					}
+					break
+				}
+			}
+		}
+	}
+	return result, found
 }
 func buildPath(end *pathEntry) []PathNode {
 	var p []PathNode
 	for x := end; x != nil; x = x.parent {
-		p = append(p, PathNode{x.pos, x.move, x.g})
+		p = append(p, PathNode{Position: x.pos, Move: x.move, Cost: x.g})
 	}
 	for i, j := 0, len(p)-1; i < j; i, j = i+1, j-1 {
 		p[i], p[j] = p[j], p[i]
@@ -419,18 +814,18 @@ func (n *Navigator) neighbors(p BlockPos, opt NavigationOptions) []PathNode {
 		}
 		q := BlockPos{p.X + d[0], p.Y, p.Z + d[1]}
 		if move, cost, ok := n.passable(q, opt); ok {
-			out = append(out, PathNode{q, move, cost * multiplier})
+			out = append(out, n.pathNode(q, move, cost*multiplier))
 			continue
 		}
 		q.Y++
 		if _, cost, ok := n.passable(q, opt); ok && n.clear(BlockPos{p.X, p.Y + 2, p.Z}) {
-			out = append(out, PathNode{q, MoveJump, (cost + 1.5) * multiplier})
+			out = append(out, n.pathNode(q, MoveJump, (cost+1.5)*multiplier))
 			continue
 		}
 		for drop := 1; drop <= opt.MaxDrop; drop++ {
 			q.Y = p.Y - drop
 			if _, cost, ok := n.passable(q, opt); ok {
-				out = append(out, PathNode{q, MoveDrop, (cost + float64(drop)*.4) * multiplier})
+				out = append(out, n.pathNode(q, MoveDrop, (cost+float64(drop)*.4)*multiplier))
 				break
 			}
 			if !n.clear(q) {
@@ -451,7 +846,7 @@ func (n *Navigator) neighbors(p BlockPos, opt NavigationOptions) []PathNode {
 				}
 				landing := BlockPos{p.X + d[0]*(gap+1), p.Y, p.Z + d[1]*(gap+1)}
 				if _, cost, ok := n.passable(landing, opt); ok {
-					out = append(out, PathNode{landing, MoveParkour, cost * float64(gap+1) * .9})
+					out = append(out, n.pathNode(landing, MoveParkour, cost*float64(gap+1)*.9))
 					break
 				}
 			}
@@ -461,7 +856,7 @@ func (n *Navigator) neighbors(p BlockPos, opt NavigationOptions) []PathNode {
 		for _, dy := range []int{-1, 1} {
 			q := BlockPos{p.X, p.Y + dy, p.Z}
 			if n.clear(q) {
-				out = append(out, PathNode{q, MoveClimb, 1.5})
+				out = append(out, n.pathNode(q, MoveClimb, 1.5))
 			}
 		}
 	}
@@ -469,11 +864,34 @@ func (n *Navigator) neighbors(p BlockPos, opt NavigationOptions) []PathNode {
 		for _, dy := range []int{-1, 1} {
 			q := BlockPos{p.X, p.Y + dy, p.Z}
 			if move, cost, ok := n.passable(q, opt); ok && move == MoveSwim {
-				out = append(out, PathNode{q, MoveSwim, cost + .5})
+				out = append(out, n.pathNode(q, MoveSwim, cost+.5))
 			}
 		}
 	}
+	if opt.AllowPlacing {
+		q := BlockPos{p.X, p.Y + 1, p.Z}
+		if n.bodyClear(q) {
+			node := n.pathNode(q, MovePillar, 5)
+			node.Place = []BlockPos{p}
+			out = append(out, node)
+		}
+	}
 	return out
+}
+
+func (n *Navigator) pathNode(pos BlockPos, move MoveKind, cost float64) PathNode {
+	node := PathNode{Position: pos, Move: move, Cost: cost}
+	if move != MoveDoor {
+		for _, p := range []BlockPos{pos, {pos.X, pos.Y + 1, pos.Z}} {
+			if b, ok := n.bot.World.Block(p); ok && !n.blockClear(b) {
+				node.Break = append(node.Break, p)
+			}
+		}
+	}
+	if move == MoveBridge {
+		node.Place = []BlockPos{{pos.X, pos.Y - 1, pos.Z}}
+	}
+	return node
 }
 
 func (n *Navigator) bodyClear(p BlockPos) bool {
@@ -506,13 +924,18 @@ func (n *Navigator) passable(p BlockPos, opt NavigationOptions) (MoveKind, float
 		return 0, 0, false
 	}
 	if !n.blockClear(head) && !isFluid(head.Name) {
-		return 0, 0, false
+		if !(opt.AllowBreaking && head.Hardness >= 0) {
+			return 0, 0, false
+		}
 	}
 	below, ok := n.bot.World.Block(BlockPos{p.X, p.Y - 1, p.Z})
 	if !ok {
 		return 0, 0, false
 	}
 	if !n.blockSolid(below) && !fluid && !n.climbable(p) {
+		if opt.AllowPlacing && n.bodyClear(p) {
+			return MoveBridge, 4, true
+		}
 		return 0, 0, false
 	}
 	if door {

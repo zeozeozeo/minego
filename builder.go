@@ -27,7 +27,10 @@ type PlaceResult struct {
 	Face     int
 }
 
-type Builder struct{ bot *Bot }
+type Builder struct {
+	bot        *Bot
+	onProgress event[BuildProgress]
+}
 
 func newBuilder(bot *Bot) *Builder { return &Builder{bot: bot} }
 

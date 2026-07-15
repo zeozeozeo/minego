@@ -18,6 +18,8 @@ const (
 	FeatureNavigation      Feature = "navigation"
 	FeatureMining          Feature = "mining"
 	FeatureBuilding        Feature = "building"
+	FeatureCrafting        Feature = "crafting"
+	FeatureElytra          Feature = "elytra"
 )
 
 // Descriptor is stable, immutable metadata for a Minecraft version pack.

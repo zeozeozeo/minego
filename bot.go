@@ -43,11 +43,14 @@ type Bot struct {
 	World         *World
 	Self          *Self
 	Entities      *Entities
+	Players       *Players
 	Inventory     *Inventory
 	Chat          *Chat
 	Navigator     *Navigator
 	Miner         *Miner
 	Builder       *Builder
+	Crafter       *Crafter
+	Elytra        *Elytra
 	Observability *Observability
 
 	onDisconnect event[DisconnectEvent]
@@ -97,11 +100,14 @@ func New(cfg Config) (*Bot, error) {
 	b.World = newWorld(b)
 	b.Self = newSelf()
 	b.Entities = newEntities()
+	b.Players = newPlayers()
 	b.Inventory = newInventory(b)
 	b.Chat = newChat(b)
 	b.Navigator = newNavigator(b)
 	b.Miner = newMiner(b)
 	b.Builder = newBuilder(b)
+	b.Crafter = newCrafter(b)
+	b.Elytra = newElytra(b)
 	b.Observability = newObservability(b)
 	for _, plugin := range cfg.Plugins {
 		if plugin == nil {
