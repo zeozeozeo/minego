@@ -26,3 +26,18 @@ func TestElytraFindsSafeLanding(t *testing.T) {
 		t.Fatalf("unexpected landing: %+v %t", p, ok)
 	}
 }
+
+func TestFindBuildSiteAllowsLevelingDiggableTerrain(t *testing.T) {
+	b := syntheticBot(t)
+	stone, _ := b.pack.StateID("minecraft:stone", nil)
+	b.Self.update(func(s *SelfState) { s.Position = Vec3{1.5, 64, 1.5} })
+	b.World.chunks[chunkKey{0, 0}].SetBlockState(2, 64, 2, stone)
+	opt := FindSiteOptions{Width: 2, Depth: 2, Height: 2, Radius: 1, AllowClearing: true}
+	site, err := b.Builder.FindSite(opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if site.Y != 64 {
+		t.Fatalf("clearable site was selected underground: %+v", site)
+	}
+}

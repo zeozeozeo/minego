@@ -92,6 +92,29 @@ func (p *PalettedContainer) GetXYZ(x, y, z int) int32 {
 	return p.Get(p.flatIndex(x, y, z))
 }
 
+// Values returns the distinct global values represented by the container.
+// Callers can use this to reject an entire section before decoding all 4096
+// entries. The returned slice is detached from the internal palette.
+func (p *PalettedContainer) Values() []int32 {
+	if p.bitsPerEntry == 0 {
+		return []int32{p.singleValue}
+	}
+	if p.palette != nil {
+		return append([]int32(nil), p.palette...)
+	}
+	seen := make(map[int32]struct{})
+	values := make([]int32, 0, 32)
+	for i := range p.kind.EntryCount {
+		value := p.Get(i)
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	return values
+}
+
 // Set sets the entry at the given flat index.
 func (p *PalettedContainer) Set(index int, value int32) {
 	if p.bitsPerEntry == 0 {

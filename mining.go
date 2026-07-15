@@ -277,16 +277,21 @@ func (m *Miner) Mine(ctx context.Context, selector Selector, count int, opt Mine
 	origin := m.bot.Self.State().Position.Block()
 	seen := map[BlockPos]bool{}
 	stagnantExploration := 0
+	var targets []Block
+	var pickup []BlockPos
 	for result.Completed < count {
-		targets := m.search(selector, seen)
-		minedAny := false
-		for _, target := range targets {
-			if result.Completed >= count {
-				break
+		if len(targets) > 0 {
+			self := m.bot.Self.State().Position
+			sort.Slice(targets, func(i, j int) bool {
+				return miningTargetScore(self, targets[i], pickup) < miningTargetScore(self, targets[j], pickup)
+			})
+			target := targets[0]
+			targets = targets[1:]
+			if seen[target.Position] || m.breakRejected(target.Position) {
+				continue
 			}
-			// A rejection may have marked this target's whole protected chunk
-			// after the candidate snapshot was built.
-			if m.breakRejected(target.Position) {
+			current, loaded := m.bot.World.Block(target.Position)
+			if !loaded || current.Name != target.Name {
 				continue
 			}
 			seen[target.Position] = true
@@ -313,12 +318,21 @@ func (m *Miner) Mine(ctx context.Context, selector Selector, count int, opt Mine
 			result.Completed++
 			result.Mined = append(result.Mined, target.Position)
 			result.Blocks = append(result.Blocks, target)
+			pickup = append(pickup, target.Position)
 			m.onProgress.emit(MiningProgress{Kind: "target", Name: target.Name, Position: target.Position, Completed: result.Completed, Requested: count})
-			m.collectDrops(ctx, target.Position, opt.Navigation)
-			minedAny = true
-		}
-		if minedAny {
+			if len(pickup) >= 6 || result.Completed == count {
+				m.collectDrops(ctx, pickup, opt.Navigation)
+				pickup = pickup[:0]
+			}
 			continue
+		}
+		targets = m.search(selector, seen)
+		if len(targets) > 0 {
+			continue
+		}
+		if len(pickup) > 0 {
+			m.collectDrops(ctx, pickup, opt.Navigation)
+			pickup = pickup[:0]
 		}
 		frontier, ok := m.frontier(origin, opt.ExplorationRadius)
 		if !ok {
@@ -365,6 +379,21 @@ func (m *Miner) Mine(ctx context.Context, selector Selector, count int, opt Mine
 	}
 	result.Status = MineComplete
 	return result, nil
+}
+
+func miningTargetScore(self Vec3, target Block, cluster []BlockPos) float64 {
+	position := Vec3{float64(target.Position.X) + .5, float64(target.Position.Y) + .5, float64(target.Position.Z) + .5}
+	score := self.Distance(position)
+	// Stay on the current connected tree/vein when it is still nearby. This
+	// prevents alternating between equally distant trunks as their vertical
+	// blocks reorder by straight-line distance.
+	if len(cluster) > 0 {
+		last := cluster[len(cluster)-1]
+		if abs(last.X-target.Position.X) <= 1 && abs(last.Z-target.Position.Z) <= 1 && abs(last.Y-target.Position.Y) <= 4 {
+			score -= 4
+		}
+	}
+	return score
 }
 
 func loadedChunkSet(chunks [][2]int32) map[[2]int32]struct{} {
@@ -432,27 +461,49 @@ func (m *Miner) search(s Selector, skip map[BlockPos]bool) []Block {
 	states := make(map[int32]cachedState, 512)
 	m.bot.World.mu.RLock()
 	for key, col := range m.bot.World.chunks {
-		for y := -64; y < 320; y++ {
-			for z := 0; z < 16; z++ {
-				for x := 0; x < 16; x++ {
-					pos := BlockPos{int(key.X)*16 + x, y, int(key.Z)*16 + z}
-					if skip[pos] || m.breakRejected(pos) {
-						continue
+		for sectionIndex, section := range col.Sections {
+			if section == nil || section.BlockStates == nil {
+				continue
+			}
+			sectionMatches := false
+			for _, id := range section.BlockStates.Values() {
+				cached, known := states[id]
+				if !known {
+					b, ok := m.bot.block(BlockPos{}, id)
+					cached = cachedState{block: b, ok: ok, match: ok && names[b.Name]}
+					if ok && s.Predicate != nil {
+						cached.match = cached.match || s.Predicate(b)
 					}
-					id := col.GetBlockState(x, y, z)
-					cached, known := states[id]
-					if !known {
-						b, ok := m.bot.block(BlockPos{}, id)
-						cached = cachedState{block: b, ok: ok, match: ok && names[b.Name]}
-						states[id] = cached
-					}
-					if !cached.ok {
-						continue
-					}
-					b := cached.block
-					b.Position = pos
-					if cached.match || (s.Predicate != nil && s.Predicate(b)) {
-						out = append(out, b)
+					states[id] = cached
+				}
+				sectionMatches = sectionMatches || cached.match
+			}
+			if !sectionMatches {
+				continue
+			}
+			baseY := -64 + sectionIndex*16
+			for y := 0; y < 16; y++ {
+				for z := 0; z < 16; z++ {
+					for x := 0; x < 16; x++ {
+						pos := BlockPos{int(key.X)*16 + x, baseY + y, int(key.Z)*16 + z}
+						if skip[pos] || m.breakRejected(pos) {
+							continue
+						}
+						id := section.GetBlockState(x, y, z)
+						cached, known := states[id]
+						if !known {
+							b, ok := m.bot.block(BlockPos{}, id)
+							cached = cachedState{block: b, ok: ok, match: ok && names[b.Name]}
+							states[id] = cached
+						}
+						if !cached.ok {
+							continue
+						}
+						b := cached.block
+						b.Position = pos
+						if cached.match {
+							out = append(out, b)
+						}
 					}
 				}
 			}
@@ -545,29 +596,62 @@ func (m *Miner) clearLineOfSight(ctx context.Context, pos BlockPos, nav Navigati
 	return fmt.Errorf("minego: too many obstructions in front of %v", pos)
 }
 
-func (m *Miner) collectDrops(ctx context.Context, mined BlockPos, nav NavigationOptions) {
-	discoveryDeadline := time.Now().Add(250 * time.Millisecond)
-	seen := make(map[int32]bool)
-	for handled := 0; handled < 8; {
-		drop, found := m.nearbyDrop(mined, 8, seen)
+func (m *Miner) collectDrops(ctx context.Context, mined []BlockPos, nav NavigationOptions) {
+	if len(mined) == 0 {
+		return
+	}
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(150 * time.Millisecond):
+	}
+	if nav.MaxNodes <= 0 || nav.MaxNodes > 2000 {
+		nav.MaxNodes = 2000
+	}
+	for attempts := 0; attempts < 3; attempts++ {
+		drop, found := m.nearestBatchDrop(mined, 8)
 		if !found {
-			if time.Now().After(discoveryDeadline) {
-				return
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(50 * time.Millisecond):
-				continue
+			return
+		}
+		m.onProgress.emit(MiningProgress{Kind: "collecting", Position: drop.Position.Block()})
+		if _, err := m.bot.Navigator.Navigate(ctx, GoalNear{Position: drop.Position.Block(), Radius: 1.25}, nav); err != nil {
+			m.onProgress.emit(MiningProgress{Kind: "drop-unreachable", Position: drop.Position.Block(), Err: err})
+			return
+		}
+		deadline := time.NewTimer(350 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			deadline.Stop()
+			return
+		case <-deadline.C:
+		}
+	}
+}
+
+func (m *Miner) nearestBatchDrop(mined []BlockPos, radius float64) (Entity, bool) {
+	self := m.bot.Self.State().Position
+	best := math.MaxFloat64
+	var result Entity
+	found := false
+	for _, entity := range m.bot.Entities.All() {
+		if entity.Type != "minecraft:item" {
+			continue
+		}
+		nearBatch := false
+		for _, pos := range mined {
+			origin := Vec3{float64(pos.X) + .5, float64(pos.Y) + .5, float64(pos.Z) + .5}
+			if entity.Position.Distance(origin) < radius {
+				nearBatch = true
+				break
 			}
 		}
-		seen[drop.ID] = true
-		m.collectDrop(ctx, drop, nav)
-		handled++
-		// Once one entity is collected, also drain any leaf or multi-item drops
-		// that spawned beside the same mined block without another discovery wait.
-		discoveryDeadline = time.Now()
+		if nearBatch {
+			if distance := entity.Position.Distance(self); distance < best {
+				best, result, found = distance, entity, true
+			}
+		}
 	}
+	return result, found
 }
 
 func (m *Miner) nearbyDrop(mined BlockPos, radius float64, skip map[int32]bool) (Entity, bool) {

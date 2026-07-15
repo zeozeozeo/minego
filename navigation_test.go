@@ -62,6 +62,52 @@ func TestPathCancellation(t *testing.T) {
 	}
 }
 
+func TestNavigateAlreadyReachedReturnsWithoutTickLoop(t *testing.T) {
+	b := syntheticBot(t)
+	b.Self.update(func(s *SelfState) { s.Position = Vec3{1.5, 64, 1.5} })
+	result, err := b.Navigator.Navigate(context.Background(), GoalBlock(BlockPos{1, 64, 1}), NavigationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Path) != 1 || result.Expanded != 0 {
+		t.Fatalf("already-reached navigation planned a route: %#v", result)
+	}
+}
+
+func TestRouteInvalidationOnlyTracksUsedCells(t *testing.T) {
+	path := []PathNode{{Position: BlockPos{1, 64, 1}}, {Position: BlockPos{2, 64, 1}}, {Position: BlockPos{3, 64, 1}, Break: []BlockPos{{3, 65, 1}}}}
+	if routeAffected(path, 1, BlockPos{8, 64, 1}) {
+		t.Fatal("nearby unrelated block invalidated route")
+	}
+	if !routeAffected(path, 1, BlockPos{2, 63, 1}) {
+		t.Fatal("changed route support did not invalidate route")
+	}
+	if !routeAffected(path, 1, BlockPos{3, 65, 1}) {
+		t.Fatal("changed planned break did not invalidate route")
+	}
+}
+
+func TestWalkWaypointAdvancesAfterOvershoot(t *testing.T) {
+	run := &navRun{path: []PathNode{{Position: BlockPos{1, 64, 1}}, {Position: BlockPos{2, 64, 1}, Move: MoveWalk}, {Position: BlockPos{3, 64, 1}, Move: MoveWalk}}, index: 1}
+	if !waypointPassed(run, Vec3{3.1, 64, 1.5}) {
+		t.Fatal("overshot walk waypoint was not advanced")
+	}
+	if waypointPassed(run, Vec3{1.8, 64, 1.5}) {
+		t.Fatal("waypoint advanced before player reached it")
+	}
+}
+
+func TestCardinalCollisionRecoveryRecentersAwayFromSideContact(t *testing.T) {
+	state := SelfState{Position: Vec3{235.02, 76, 112.7}}
+	input, ok := collisionRecoveryInput(state, BlockPos{234, 76, 112}, BlockPos{234, 76, 111}, true, false)
+	if !ok || input.X >= 0 || input.Z != 0 {
+		t.Fatalf("side collision recovery = %#v, %t", input, ok)
+	}
+	if _, ok := collisionRecoveryInput(state, BlockPos{234, 76, 112}, BlockPos{234, 76, 111}, false, true); ok {
+		t.Fatal("forward collision was incorrectly treated as a side slide")
+	}
+}
+
 func TestPhysicsStandsOnAuthoritativeCollision(t *testing.T) {
 	b := syntheticBot(t)
 	state := SelfState{Position: Vec3{1.5, 64, 1.5}, OnGround: true}
@@ -90,6 +136,31 @@ func TestPhysicsClipsWall(t *testing.T) {
 	got := b.Navigator.physicsStep(state, physicsInput{X: .4})
 	if got.Position.X > 1.7000001 || !got.HorizontalCollision {
 		t.Fatalf("player crossed wall boundary: %#v", got)
+	}
+}
+
+func TestPhysicsSlidesAlongBlockFace(t *testing.T) {
+	b := syntheticBot(t)
+	stone, _ := b.pack.StateID("minecraft:stone", nil)
+	b.World.chunks[chunkKey{0, 0}].SetBlockState(2, 64, 1, stone)
+	state := SelfState{Position: Vec3{1.7, 64, 1.5}, OnGround: true}
+	got := b.Navigator.physicsStep(state, physicsInput{X: .2, Z: .2})
+	if got.Position.X > 1.700001 {
+		t.Fatalf("player crossed wall while sliding: %#v", got)
+	}
+	if got.Position.Z <= state.Position.Z {
+		t.Fatalf("collision zeroed free sliding component: %#v", got)
+	}
+}
+
+func TestPhysicsDepenetratesHorizontalBlockOverlap(t *testing.T) {
+	b := syntheticBot(t)
+	stone, _ := b.pack.StateID("minecraft:stone", nil)
+	b.World.chunks[chunkKey{0, 0}].SetBlockState(2, 64, 1, stone)
+	state := SelfState{Position: Vec3{1.71, 64, 1.5}, OnGround: true}
+	got := b.Navigator.physicsStep(state, physicsInput{})
+	if got.Position.X >= state.Position.X {
+		t.Fatalf("overlapping player was not pushed out of block: %#v", got)
 	}
 }
 

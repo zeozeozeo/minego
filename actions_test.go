@@ -93,6 +93,9 @@ func TestAbilitiesPassengersAndDamageEvents(t *testing.T) {
 	}
 
 	payload := ns.NewWriter()
+	if err := payload.WriteVarInt(8); err != nil {
+		t.Fatal(err)
+	}
 	if err := payload.WriteVarInt(2); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +105,9 @@ func TestAbilitiesPassengersAndDamageEvents(t *testing.T) {
 	if err := payload.WriteVarInt(42); err != nil {
 		t.Fatal(err)
 	}
-	handleTestPacket(t, b, &packets.S2CSetPassengers{EntityId: 8, Passengers: payload.Bytes()})
+	if err := b.handleSetPassengers(payload.Bytes()); err != nil {
+		t.Fatal(err)
+	}
 	if b.Self.State().VehicleID != 8 {
 		t.Fatalf("vehicle = %d", b.Self.State().VehicleID)
 	}

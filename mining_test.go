@@ -89,6 +89,16 @@ func TestNewLoadedChunksTracksIdentityNotCount(t *testing.T) {
 	}
 }
 
+func TestMiningTargetScoreKeepsCurrentTreeTogether(t *testing.T) {
+	self := Vec3{10.5, 64, 10.5}
+	cluster := []BlockPos{{10, 64, 10}}
+	sameTree := Block{Position: BlockPos{10, 67, 10}}
+	otherTree := Block{Position: BlockPos{12, 64, 10}}
+	if miningTargetScore(self, sameTree, cluster) >= miningTargetScore(self, otherTree, cluster) {
+		t.Fatal("nearby second trunk interrupted current connected tree")
+	}
+}
+
 func TestUnsupportedEntityMetadataIsNonFatal(t *testing.T) {
 	b := syntheticBot(t)
 	b.cfg.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))

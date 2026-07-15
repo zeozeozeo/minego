@@ -37,3 +37,15 @@ func TestReplaceableBlockTag(t *testing.T) {
 		t.Fatal("stone must not be replaceable")
 	}
 }
+
+func TestBuilderChoosesReachableLocalBlockBeforeInputOrder(t *testing.T) {
+	b := syntheticBot(t)
+	b.Self.update(func(s *SelfState) { s.Position = Vec3{1.5, 64, 1.5} })
+	blocks := []BlueprintBlock{
+		{Offset: BlockPos{X: 10}, Item: "minecraft:cobblestone"},
+		{Offset: BlockPos{X: 1}, Item: "minecraft:cobblestone"},
+	}
+	if got := b.Builder.nextBuildBlock(BlockPos{0, 64, 1}, blocks, false); got != 1 {
+		t.Fatalf("next build block = %d, want local supported block 1", got)
+	}
+}

@@ -272,32 +272,7 @@ func (b *Bot) handlePlay(w *jp.WirePacket) error {
 			s.FlyingSpeed = float32(p.FlyingSpeed)
 		})
 	case packet_ids.S2CSetPassengersID:
-		var p packets.S2CSetPassengers
-		if err := w.ReadInto(&p); err != nil {
-			return err
-		}
-		buf := ns.NewReader(p.Passengers)
-		count, err := buf.ReadVarInt()
-		if err != nil {
-			return err
-		}
-		selfID, aboard := b.Self.State().EntityID, false
-		for index := int32(0); index < int32(count); index++ {
-			id, err := buf.ReadVarInt()
-			if err != nil {
-				return err
-			}
-			if int32(id) == selfID {
-				aboard = true
-			}
-		}
-		b.Self.update(func(s *SelfState) {
-			if aboard {
-				s.VehicleID = int32(p.EntityId)
-			} else if s.VehicleID == int32(p.EntityId) {
-				s.VehicleID = 0
-			}
-		})
+		return b.handleSetPassengers(w.Data)
 	case packet_ids.S2CDamageEventID:
 		var p packets.S2CDamageEvent
 		if err := w.ReadInto(&p); err != nil {
@@ -335,6 +310,36 @@ func (b *Bot) handlePlay(w *jp.WirePacket) error {
 		}
 		b.Chat.onMessage.emit(ChatMessage{Kind: ChatPlayer, Sender: p.Sender.String(), Text: text, Verified: p.Signature.Present})
 	}
+	return nil
+}
+
+func (b *Bot) handleSetPassengers(data []byte) error {
+	buf := ns.NewReader(data)
+	vehicle, err := buf.ReadVarInt()
+	if err != nil {
+		return err
+	}
+	count, err := buf.ReadVarInt()
+	if err != nil {
+		return err
+	}
+	selfID, aboard := b.Self.State().EntityID, false
+	for index := int32(0); index < int32(count); index++ {
+		id, err := buf.ReadVarInt()
+		if err != nil {
+			return err
+		}
+		if int32(id) == selfID {
+			aboard = true
+		}
+	}
+	b.Self.update(func(s *SelfState) {
+		if aboard {
+			s.VehicleID = int32(vehicle)
+		} else if s.VehicleID == int32(vehicle) {
+			s.VehicleID = 0
+		}
+	})
 	return nil
 }
 

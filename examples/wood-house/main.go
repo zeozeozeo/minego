@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/zeozeozeo/minego"
@@ -40,11 +41,28 @@ func main() {
 			log.Printf("send progress to chat: %v", err)
 		}
 	}
+	started := time.Now()
+	phaseStarted := started
+	phase := func(name string) {
+		now := time.Now()
+		log.Printf("phase %s completed in %s (total %s)", name, now.Sub(phaseStarted).Round(time.Millisecond), now.Sub(started).Round(time.Millisecond))
+		phaseStarted = now
+	}
+	var replans, clearedLeaves, routeMaterial atomic.Int64
 	bot.Navigator.OnProgress(func(progress minego.PathProgress) {
 		log.Printf("path %d/%d position=(%.1f, %.1f, %.1f) target=%+v move=%d replan=%t", progress.Index, progress.Total, progress.Position.X, progress.Position.Y, progress.Position.Z, progress.Target, progress.Move, progress.Replanned)
+		if progress.Replanned {
+			replans.Add(1)
+		}
 	})
 	bot.Miner.OnProgress(func(progress minego.MiningProgress) {
 		log.Printf("mining %s %s at %+v (%d/%d): %v", progress.Kind, progress.Name, progress.Position, progress.Completed, progress.Requested, progress.Err)
+		if progress.Kind == "clearing" && strings.HasSuffix(progress.Name, "_leaves") {
+			clearedLeaves.Add(1)
+		}
+		if progress.Kind == "target" && (progress.Name == "minecraft:dirt" || progress.Name == "minecraft:cobblestone") {
+			routeMaterial.Add(1)
+		}
 		if progress.Kind == "target" && isLog(progress.Name) && (progress.Completed == 1 || progress.Completed%4 == 0 || progress.Completed == progress.Requested) {
 			announce("Mined logs: %d/%d", progress.Completed, progress.Requested)
 		}
@@ -55,11 +73,12 @@ func main() {
 		}
 	})
 	announce("Looking for a tree")
-	first, err := bot.Miner.Mine(ctx, minego.Tags("minecraft:logs"), 1, minego.MineOptions{Navigation: survivalNavigation()})
+	first, err := bot.Miner.Mine(ctx, minego.Tags("minecraft:logs"), 1, minego.MineOptions{Navigation: collectionNavigation()})
 	if err != nil || len(first.Blocks) == 0 {
 		log.Fatalf("find wood: %v", err)
 	}
 	logItem := first.Blocks[0].Name
+	phase("tree search")
 	wood := woodFamily(logItem)
 	planks := "minecraft:" + wood + "_planks"
 	door := "minecraft:" + wood + "_door"
@@ -69,13 +88,14 @@ func main() {
 			log.Fatalf("could not collect enough %s: have %d/33", logItem, itemCount(bot, logItem))
 		}
 		missing := 33 - itemCount(bot, logItem)
-		if _, err := bot.Miner.Mine(ctx, minego.Blocks(logItem), missing, minego.MineOptions{Navigation: survivalNavigation()}); err != nil {
+		if _, err := bot.Miner.Mine(ctx, minego.Blocks(logItem), missing, minego.MineOptions{Navigation: collectionNavigation()}); err != nil {
 			log.Fatal(err)
 		}
 		// Allow the final pickup packets to reach the inventory before deciding
 		// whether replacement logs are needed for drops lost down terrain.
 		_ = waitForItems(ctx, bot, logItem, 33, time.Second)
 	}
+	phase("log collection")
 	announce("Crafting planks and a crafting table")
 	if _, err = bot.Crafter.Craft(ctx, planks, 129, minego.CraftOptions{}); err != nil {
 		log.Fatal(err)
@@ -83,33 +103,45 @@ func main() {
 	if _, err = bot.Crafter.Craft(ctx, "minecraft:crafting_table", 1, minego.CraftOptions{}); err != nil {
 		log.Fatal(err)
 	}
-	site, err := bot.Builder.FindSite(minego.FindSiteOptions{Width: 9, Depth: 7, Height: 5, Radius: 64})
+	phase("initial crafting")
+	siteOptions := minego.FindSiteOptions{Width: 9, Depth: 7, Height: 5, Radius: 64, AllowClearing: true}
+	site, err := bot.Builder.FindSite(siteOptions)
 	if err != nil {
 		log.Fatal(err)
 	}
+	cleared, err := bot.Builder.ClearSite(ctx, site, siteOptions, constructionNavigation())
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("prepared build site by clearing %d blocks", cleared)
 	table := minego.BlockPos{X: site.X + 8, Y: site.Y, Z: site.Z}
 	announce("Building at %d %d %d", site.X, site.Y, site.Z)
-	if _, err = bot.Builder.Build(ctx, table, minego.Blueprint{Name: "table", Blocks: []minego.BlueprintBlock{{Item: "minecraft:crafting_table"}}}, minego.BuildOptions{Navigation: survivalNavigation()}); err != nil {
+	if _, err = bot.Builder.Build(ctx, table, minego.Blueprint{Name: "table", Blocks: []minego.BlueprintBlock{{Item: "minecraft:crafting_table"}}}, minego.BuildOptions{Navigation: constructionNavigation()}); err != nil {
 		log.Fatal(err)
 	}
 	if _, err = bot.Crafter.Craft(ctx, door, 1, minego.CraftOptions{Table: &table}); err != nil {
 		log.Fatal(err)
 	}
-	result, err := bot.Builder.Build(ctx, site, houseBlueprint(planks, door), minego.BuildOptions{Navigation: survivalNavigation()})
+	phase("site and table")
+	result, err := bot.Builder.Build(ctx, site, houseBlueprint(planks, door), minego.BuildOptions{Navigation: constructionNavigation()})
 	if err != nil {
 		log.Fatal(err)
 	}
 	log.Printf("built %s house at %+v (%d blocks)", wood, site, result.Placed)
+	phase("house build")
+	log.Printf("run metrics duration=%s replans=%d cleared_leaves=%d route_material=%d", time.Since(started).Round(time.Millisecond), replans.Load(), clearedLeaves.Load(), routeMaterial.Load())
 	_ = bot.Chat.Send(ctx, fmt.Sprintf("Built the %s house at %d %d %d", wood, site.X, site.Y, site.Z))
 }
 
-func survivalNavigation() minego.NavigationOptions {
+func survivalNavigation(maxNodes int) minego.NavigationOptions {
 	return minego.NavigationOptions{
-		Sprint: true, AllowBreaking: true, AllowPlacing: true, AcquireTemporary: true,
+		MaxNodes: maxNodes, Sprint: true, AllowBreaking: true, AllowPlacing: true, AcquireTemporary: true,
 		TemporaryBlocks: []string{"dirt", "cobblestone"},
 		BreakFilter:     func(block minego.Block) bool { return strings.HasSuffix(block.Name, "_leaves") },
 	}
 }
+func collectionNavigation() minego.NavigationOptions   { return survivalNavigation(12000) }
+func constructionNavigation() minego.NavigationOptions { return survivalNavigation(8000) }
 func woodFamily(name string) string {
 	s := strings.TrimPrefix(name, "minecraft:")
 	s = strings.TrimPrefix(s, "stripped_")

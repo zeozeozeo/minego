@@ -67,18 +67,11 @@ func (b *Builder) Place(ctx context.Context, pos BlockPos, opt PlaceOptions) (Pl
 	if _, ok := b.bot.pack.StateID(item.Name, nil); !ok {
 		return PlaceResult{}, fmt.Errorf("%w: %s has no block state", ErrNoPlacementItem, item.Name)
 	}
-	support, face, cursor, ok := b.supportFace(pos)
-	if !ok {
-		return PlaceResult{}, ErrNoPlacementFace
-	}
 	eye := b.bot.Self.State().Position
 	eye.Y += 1.62
-	hit := Vec3{float64(support.X) + cursor.X, float64(support.Y) + cursor.Y, float64(support.Z) + cursor.Z}
-	if eye.Distance(hit) > opt.Reach {
-		return PlaceResult{}, fmt.Errorf("minego: placement face is outside reach")
-	}
-	if !b.bot.Miner.lineOfSight(eye, hit, support) {
-		return PlaceResult{}, fmt.Errorf("minego: placement face is obstructed")
+	support, face, cursor, ok := b.supportFaceFrom(pos, eye, opt.Reach)
+	if !ok {
+		return PlaceResult{}, ErrNoPlacementFace
 	}
 	if err := b.bot.Inventory.Select(ctx, hotbar); err != nil {
 		return PlaceResult{}, err
@@ -162,12 +155,23 @@ var placementFaces = [...]placementFace{
 }
 
 func (b *Builder) supportFace(pos BlockPos) (BlockPos, int, Vec3, bool) {
+	return b.supportFaceFrom(pos, Vec3{}, 0)
+}
+
+func (b *Builder) supportFaceFrom(pos BlockPos, eye Vec3, reach float64) (BlockPos, int, Vec3, bool) {
 	for _, candidate := range placementFaces {
 		support := BlockPos{pos.X + candidate.dx, pos.Y + candidate.dy, pos.Z + candidate.dz}
 		block, ok := b.bot.World.Block(support)
-		if ok && len(block.Collision) > 0 {
-			return support, candidate.face, candidate.cursor, true
+		if !ok || len(block.Collision) == 0 {
+			continue
 		}
+		if reach > 0 {
+			hit := Vec3{float64(support.X) + candidate.cursor.X, float64(support.Y) + candidate.cursor.Y, float64(support.Z) + candidate.cursor.Z}
+			if eye.Distance(hit) > reach || !b.bot.Miner.lineOfSight(eye, hit, support) {
+				continue
+			}
+		}
+		return support, candidate.face, candidate.cursor, true
 	}
 	return BlockPos{}, 0, Vec3{}, false
 }

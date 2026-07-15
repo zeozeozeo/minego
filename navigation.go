@@ -138,13 +138,16 @@ type navRun struct {
 	planner      *dstarPlanner
 	changes      []BlockPos
 	jumpIndex    int
+	expected     map[BlockPos]bool
 }
 type Navigator struct {
-	bot        *Bot
-	mu         sync.Mutex
-	active     *navRun
-	sprinting  bool
-	onProgress event[PathProgress]
+	bot                 *Bot
+	mu                  sync.Mutex
+	active              *navRun
+	sprinting           bool
+	horizontalCollision bool
+	blockedX, blockedZ  bool
+	onProgress          event[PathProgress]
 }
 
 func newNavigator(b *Bot) *Navigator {
@@ -152,19 +155,39 @@ func newNavigator(b *Bot) *Navigator {
 	b.World.OnBlockChange(func(change BlockChange) {
 		n.mu.Lock()
 		if n.active != nil {
-			for i := n.active.index; i < len(n.active.path); i++ {
-				p := n.active.path[i].Position
-				if abs(p.X-change.Position.X) <= 2 && abs(p.Y-change.Position.Y) <= 2 && abs(p.Z-change.Position.Z) <= 2 {
-					n.active.dirty = true
-					n.active.result.Repairs++
-					n.active.changes = append(n.active.changes, change.Position)
-					break
-				}
+			if n.active.expected[change.Position] {
+				delete(n.active.expected, change.Position)
+			} else if routeAffected(n.active.path, n.active.index, change.Position) {
+				n.active.dirty = true
+				n.active.result.Repairs++
 			}
 		}
 		n.mu.Unlock()
 	})
 	return n
+}
+
+// routeAffected deliberately considers only cells used by a remaining edge.
+// Tree decay, item landings, and building updates near (but not on) a route
+// must not turn every world packet into a full path search.
+func routeAffected(path []PathNode, start int, changed BlockPos) bool {
+	for i := max(0, start-1); i < len(path); i++ {
+		node := path[i]
+		if changed == node.Position || changed == (BlockPos{node.Position.X, node.Position.Y + 1, node.Position.Z}) || changed == (BlockPos{node.Position.X, node.Position.Y - 1, node.Position.Z}) {
+			return true
+		}
+		for _, pos := range node.Break {
+			if changed == pos {
+				return true
+			}
+		}
+		for _, pos := range node.Place {
+			if changed == pos {
+				return true
+			}
+		}
+	}
+	return false
 }
 func (n *Navigator) OnProgress(fn func(PathProgress)) func() { return n.onProgress.subscribe(fn) }
 func (n *Navigator) Stop()                                   { n.finish(context.Canceled) }
@@ -294,6 +317,10 @@ func (n *Navigator) Explore(ctx context.Context, opt ExploreOptions) (ExploreRes
 	return result, nil
 }
 func (n *Navigator) Navigate(ctx context.Context, goal Goal, opt NavigationOptions) (NavigationResult, error) {
+	start := n.bot.Self.State().Position.Block()
+	if goal.Reached(start) {
+		return NavigationResult{Path: []PathNode{{Position: start}}}, nil
+	}
 	lease, err := n.bot.actions.acquire(ctx, controlMovement|controlView|controlHands|controlInventory, priorityAutomation)
 	if err != nil {
 		return NavigationResult{}, err
@@ -301,11 +328,11 @@ func (n *Navigator) Navigate(ctx context.Context, goal Goal, opt NavigationOptio
 	defer lease.Release()
 	ctx = lease.Context(ctx)
 	opt = defaultsNav(opt)
-	start := n.bot.Self.State().Position.Block()
 	path, segmented, expanded, planner, err := n.planRoute(start, goal, opt)
 	if err != nil {
 		return NavigationResult{}, err
 	}
+	path, segmented, expanded, planner = n.preferAvailableRoute(start, goal, opt, path, segmented, expanded, planner)
 	if err := n.ensureTemporary(ctx, path, opt); err != nil {
 		return NavigationResult{}, err
 	}
@@ -322,7 +349,7 @@ func (n *Navigator) Navigate(ctx context.Context, goal Goal, opt NavigationOptio
 	if segmented {
 		result.Segments = 1
 	}
-	run := &navRun{ctx: ctx, goal: goal, options: opt, path: path, index: 1, done: make(chan error, 1), result: result, lastDistance: math.MaxFloat64, jumpIndex: -1, planner: planner}
+	run := &navRun{ctx: ctx, goal: goal, options: opt, path: path, index: 1, done: make(chan error, 1), result: result, lastDistance: math.MaxFloat64, jumpIndex: -1, planner: planner, expected: make(map[BlockPos]bool)}
 	n.mu.Lock()
 	if n.active != nil {
 		n.active.done <- context.Canceled
@@ -341,6 +368,34 @@ func (n *Navigator) Navigate(ctx context.Context, goal Goal, opt NavigationOptio
 	case <-n.bot.done:
 		return run.result, ErrNotConnected
 	}
+}
+
+func (n *Navigator) preferAvailableRoute(start BlockPos, goal Goal, opt NavigationOptions, path []PathNode, segmented bool, expanded int, planner *dstarPlanner) ([]PathNode, bool, int, *dstarPlanner) {
+	missing := pathTemporaryCount(path) - n.availableTemporary(opt)
+	if missing <= 0 || !opt.AllowPlacing {
+		return path, segmented, expanded, planner
+	}
+	withoutPlacement := opt
+	withoutPlacement.AllowPlacing = false
+	alternative, altSegmented, altExpanded, _, err := n.planRoute(start, goal, withoutPlacement)
+	expanded += altExpanded
+	if err != nil {
+		return path, segmented, expanded, planner
+	}
+	// Missing route blocks require another search, dig, pickup, and inventory
+	// operation. Charge that real overhead before deciding that a pillar or
+	// bridge is the faster route.
+	if pathCost(alternative) <= pathCost(path)+float64(missing)*8 {
+		return alternative, altSegmented, expanded, nil
+	}
+	return path, segmented, expanded, planner
+}
+
+func pathCost(path []PathNode) float64 {
+	if len(path) == 0 {
+		return math.Inf(1)
+	}
+	return path[len(path)-1].Cost
 }
 func defaultsNav(o NavigationOptions) NavigationOptions {
 	if o.MaxNodes <= 0 {
@@ -478,15 +533,7 @@ func (n *Navigator) tick() {
 		var expanded int
 		var planner *dstarPlanner
 		var err error
-		if r.planner != nil && len(r.changes) > 0 {
-			path, expanded, err = r.planner.Repair(at, r.changes)
-			planner = r.planner
-			if err != nil {
-				path, segmented, expanded, planner, err = n.planRoute(at, r.goal, r.options)
-			}
-		} else {
-			path, segmented, expanded, planner, err = n.planRoute(at, r.goal, r.options)
-		}
+		path, segmented, expanded, planner, err = n.planRoute(at, r.goal, r.options)
 		// A live replan can introduce a bridge or pillar that was absent from
 		// the original route. Acquiring material here would recursively replace
 		// the active navigation run, so prefer a jump/walk detour whenever the
@@ -528,6 +575,9 @@ func (n *Navigator) tick() {
 		r.digging = true
 		idx := r.index
 		breaks := append([]BlockPos(nil), target.Break...)
+		for _, pos := range breaks {
+			r.expected[pos] = true
+		}
 		n.mu.Unlock()
 		go func() {
 			var err error
@@ -552,7 +602,7 @@ func (n *Navigator) tick() {
 				return
 			}
 			if r.index == idx {
-				r.dirty = true
+				r.path[idx].Break = nil
 			}
 		}()
 		n.move(physicsInput{}, state)
@@ -567,8 +617,10 @@ func (n *Navigator) tick() {
 		r.actionIndex = r.index
 		r.digging = true
 		r.pillaring = target.Move == MovePillar
-		idx := r.index
 		places := append([]BlockPos(nil), target.Place...)
+		for _, pos := range places {
+			r.expected[pos] = true
+		}
 		n.mu.Unlock()
 		go func() {
 			var err error
@@ -619,9 +671,6 @@ func (n *Navigator) tick() {
 				r.done <- err
 				return
 			}
-			if r.index == idx {
-				r.dirty = true
-			}
 		}()
 		n.move(physicsInput{}, state)
 		return
@@ -634,7 +683,7 @@ func (n *Navigator) tick() {
 	dx := float64(target.Position.X) + .5 - state.Position.X
 	dz := float64(target.Position.Z) + .5 - state.Position.Z
 	dist := math.Hypot(dx, dz)
-	if dist < .18 && math.Abs(state.Position.Y-float64(target.Position.Y)) < .55 {
+	if at == target.Position || dist < .30 && math.Abs(state.Position.Y-float64(target.Position.Y)) < .55 || waypointPassed(r, state.Position) {
 		r.index++
 		n.mu.Unlock()
 		progress := PathProgress{Index: r.index, Total: len(r.path), Position: state.Position, Replanned: r.replanned}
@@ -666,6 +715,19 @@ func (n *Navigator) tick() {
 	}
 	input := physicsInput{X: dx, Z: dz, LookX: dx, LookZ: dz}
 	input.Sprint = r.options.Sprint
+	// A server correction can leave the player a few millimetres across the
+	// corner of a collision shape. Retrying the same diagonal vector keeps both
+	// components pinned. Back away to the previous cell center for one or more
+	// ticks, then resume the diagonal from clean clearance.
+	if n.horizontalCollision && r.index > 0 && target.Move == MoveWalk {
+		previous := r.path[r.index-1].Position
+		if recovery, recoverable := collisionRecoveryInput(state, previous, target.Position, n.blockedX, n.blockedZ); recoverable {
+			input = recovery
+			input.Sprint = false
+		} else {
+			r.dirty = true
+		}
+	}
 	if target.Move == MoveJump && target.Position.Y > at.Y {
 		centered := true
 		if n.grounded(state) && r.index > 0 {
@@ -703,6 +765,42 @@ func (n *Navigator) tick() {
 	n.move(input, state)
 }
 
+func collisionRecoveryInput(state SelfState, previous, target BlockPos, blockedX, blockedZ bool) (physicsInput, bool) {
+	dx, dz := target.X-previous.X, target.Z-previous.Z
+	if dx != 0 && dz != 0 {
+		input, centered := centerNodeInput(state, previous, .18)
+		return input, !centered
+	}
+	if dx == 0 && blockedX && !blockedZ {
+		lateral := float64(previous.X) + .5 - state.Position.X
+		if math.Abs(lateral) <= .01 {
+			return physicsInput{}, false
+		}
+		lateral = math.Copysign(math.Min(.18, math.Abs(lateral)), lateral)
+		return physicsInput{X: lateral, LookX: lateral}, true
+	}
+	if dz == 0 && blockedZ && !blockedX {
+		lateral := float64(previous.Z) + .5 - state.Position.Z
+		if math.Abs(lateral) <= .01 {
+			return physicsInput{}, false
+		}
+		lateral = math.Copysign(math.Min(.18, math.Abs(lateral)), lateral)
+		return physicsInput{Z: lateral, LookZ: lateral}, true
+	}
+	return physicsInput{}, false
+}
+
+func waypointPassed(r *navRun, position Vec3) bool {
+	if r.index+1 >= len(r.path) || r.path[r.index].Move != MoveWalk || r.path[r.index+1].Move != MoveWalk {
+		return false
+	}
+	current := r.path[r.index].Position
+	next := r.path[r.index+1].Position
+	here := Vec3{float64(current.X) + .5, float64(current.Y), float64(current.Z) + .5}
+	there := Vec3{float64(next.X) + .5, float64(next.Y), float64(next.Z) + .5}
+	return position.Distance(there)+.05 < position.Distance(here)
+}
+
 func centerNodeInput(state SelfState, node BlockPos, speed float64) (physicsInput, bool) {
 	dx := float64(node.X) + .5 - state.Position.X
 	dz := float64(node.Z) + .5 - state.Position.Z
@@ -719,6 +817,8 @@ func (n *Navigator) move(input physicsInput, state SelfState) {
 	grounded := n.grounded(state)
 	input, yaw, pitch := orientMovement(input, state, grounded)
 	result := n.physicsStep(state, input)
+	n.horizontalCollision = result.HorizontalCollision
+	n.blockedX, n.blockedZ = result.BlockedX, result.BlockedZ
 	flags := ns.Int8(0)
 	if result.OnGround {
 		flags |= 1
@@ -879,12 +979,9 @@ func (n *Navigator) planPath(start BlockPos, goal Goal, opt NavigationOptions) (
 	return path, true, expanded + segmentExpanded, nil
 }
 func (n *Navigator) planRoute(start BlockPos, goal Goal, opt NavigationOptions) ([]PathNode, bool, int, *dstarPlanner, error) {
-	if planner, ok := n.newDStar(start, goal, opt); ok {
-		path, expanded, err := planner.Plan()
-		if err == nil {
-			return path, false, expanded, planner, nil
-		}
-	}
+	// A* expands from the player and is substantially cheaper for the short,
+	// repeated goals used by mining and building. D*'s reverse predecessor
+	// discovery made even tiny initial routes and repairs scan large 3-D areas.
 	path, segmented, expanded, err := n.planPath(start, goal, opt)
 	return path, segmented, expanded, nil, err
 }

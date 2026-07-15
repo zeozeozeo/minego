@@ -23,6 +23,7 @@ type physicsResult struct {
 	Velocity            Vec3
 	OnGround            bool
 	HorizontalCollision bool
+	BlockedX, BlockedZ  bool
 }
 
 func (n *Navigator) physicsStep(state SelfState, in physicsInput) physicsResult {
@@ -57,7 +58,19 @@ func (n *Navigator) physicsStep(state SelfState, in physicsInput) physicsResult 
 	wantedX, wantedY, wantedZ := velocity.X, velocity.Y, velocity.Z
 	region := box.expanded(wantedX, wantedY, wantedZ).expanded(0, 0.6, 0)
 	boxes := n.collisionBoxes(region)
+	pushX, pushZ := horizontalDepenetration(box, boxes)
+	box = box.offset(pushX, 0, pushZ)
 	motion := resolveMotion(box, boxes, wantedX, wantedY, wantedZ)
+	if motion.horizontalCollision && wantedX != 0 && wantedZ != 0 {
+		// Evaluate both horizontal sweep orders. At a block corner one order can
+		// clip the component that would otherwise carry the player along the free
+		// face. Vanilla resolves using the more productive horizontal candidate,
+		// which gives movement its characteristic wall sliding.
+		alternate := resolveMotionZX(box, boxes, wantedX, wantedY, wantedZ)
+		if horizontalProgress(alternate, wantedX, wantedZ) > horizontalProgress(motion, wantedX, wantedZ)+1e-9 {
+			motion = alternate
+		}
+	}
 
 	// Vanilla can step onto collision shapes up to 0.6 blocks high. Without
 	// this alternate candidate, slabs, stairs, path edges, and water banks all
@@ -71,7 +84,9 @@ func (n *Navigator) physicsStep(state SelfState, in physicsInput) physicsResult 
 	dx, dy, dz := motion.X, motion.Y, motion.Z
 
 	verticalCollision := math.Abs(dy-wantedY) > 1e-9
-	horizontalCollision := motion.horizontalCollision
+	blockedX := math.Abs(dx-wantedX) > 1e-9
+	blockedZ := math.Abs(dz-wantedZ) > 1e-9
+	horizontalCollision := blockedX || blockedZ
 	onGround := motion.onGround
 	if verticalCollision {
 		velocity.Y = 0
@@ -84,9 +99,59 @@ func (n *Navigator) physicsStep(state SelfState, in physicsInput) physicsResult 
 	}
 
 	return physicsResult{
-		Position: Vec3{state.Position.X + dx, state.Position.Y + dy, state.Position.Z + dz},
+		Position: Vec3{state.Position.X + pushX + dx, state.Position.Y + dy, state.Position.Z + pushZ + dz},
 		Velocity: velocity, OnGround: onGround, HorizontalCollision: horizontalCollision,
+		BlockedX: blockedX, BlockedZ: blockedZ,
 	}
+}
+
+func horizontalDepenetration(player AABB, obstacles []AABB) (float64, float64) {
+	best := math.MaxFloat64
+	dx, dz := 0.0, 0.0
+	for _, block := range obstacles {
+		if !overlaps(player.MinX, player.MaxX, block.MinX, block.MaxX) || !overlaps(player.MinY, player.MaxY, block.MinY, block.MaxY) || !overlaps(player.MinZ, player.MaxZ, block.MinZ, block.MaxZ) {
+			continue
+		}
+		candidates := [...]struct{ x, z float64 }{
+			{block.MinX - player.MaxX - 1e-5, 0},
+			{block.MaxX - player.MinX + 1e-5, 0},
+			{0, block.MinZ - player.MaxZ - 1e-5},
+			{0, block.MaxZ - player.MinZ + 1e-5},
+		}
+		for _, candidate := range candidates {
+			distance := math.Abs(candidate.x) + math.Abs(candidate.z)
+			if distance < best {
+				best, dx, dz = distance, candidate.x, candidate.z
+			}
+		}
+	}
+	dx = math.Max(-.2, math.Min(.2, dx))
+	dz = math.Max(-.2, math.Min(.2, dz))
+	return dx, dz
+}
+
+func resolveMotionZX(box AABB, obstacles []AABB, x, y, z float64) resolvedMotion {
+	wantedX, wantedY, wantedZ := x, y, z
+	for _, obstacle := range obstacles {
+		y = clipY(box, obstacle, y)
+	}
+	box = box.offset(0, y, 0)
+	for _, obstacle := range obstacles {
+		z = clipZ(box, obstacle, z)
+	}
+	box = box.offset(0, 0, z)
+	for _, obstacle := range obstacles {
+		x = clipX(box, obstacle, x)
+	}
+	return resolvedMotion{
+		X: x, Y: y, Z: z,
+		onGround:            wantedY < 0 && math.Abs(y-wantedY) > 1e-9,
+		horizontalCollision: math.Abs(x-wantedX) > 1e-9 || math.Abs(z-wantedZ) > 1e-9,
+	}
+}
+
+func horizontalProgress(motion resolvedMotion, wantedX, wantedZ float64) float64 {
+	return motion.X*wantedX + motion.Z*wantedZ
 }
 
 type resolvedMotion struct {
