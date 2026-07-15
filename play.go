@@ -419,7 +419,8 @@ func (b *Bot) handlePlayerPosition(w *jp.WirePacket) error {
 		return err
 	}
 	b.respawning.Store(false)
-	b.readyOnce.Do(func() { close(b.ready); go b.tickLoop() })
+	b.positionReady.Store(true)
+	b.tryReady()
 	return nil
 }
 
@@ -442,6 +443,7 @@ func (b *Bot) handleChunk(w *jp.WirePacket) error {
 	}
 	b.World.mu.Unlock()
 	b.World.onChunk.emit(key)
+	b.tryReady()
 	return nil
 }
 func (b *Bot) handleForgetChunk(w *jp.WirePacket) error {
@@ -578,7 +580,13 @@ func (b *Bot) handleEntityMotion(w *jp.WirePacket) error {
 func (b *Bot) handleEntityData(w *jp.WirePacket) error {
 	var p packets.S2CSetEntityData
 	if err := w.ReadInto(&p); err != nil {
-		return err
+		// Entity metadata is observational state. A newly introduced serializer
+		// or component codec must not tear down an otherwise healthy play
+		// connection (and stop keepalives/navigation). Preserve the framed
+		// stream, skip this one update, and retain enough detail to extend the
+		// decoder later.
+		b.cfg.Logger.Warn("ignored unsupported entity metadata", "error", err, "bytes", len(w.Data), "data", fmt.Sprintf("%x", w.Data))
+		return nil
 	}
 	b.updateEntity(int32(p.EntityId), func(e *Entity) {
 		if e.Metadata == nil {

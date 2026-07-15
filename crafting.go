@@ -211,7 +211,7 @@ func (c *Crafter) openTable(ctx context.Context, pos BlockPos) (int32, error) {
 	if _, err := c.bot.Navigator.Navigate(ctx, GoalAdjacent(pos), NavigationOptions{}); err != nil {
 		return 0, err
 	}
-	seq := c.bot.Miner.sequence.Add(1)
+	seq := c.bot.nextSequence()
 	if err := c.bot.send(ctx, &packets.C2SUseItemOn{Hand: 0, Location: ns.NewPosition(pos.X, pos.Y, pos.Z), Face: 1, CursorPositionX: .5, CursorPositionY: .5, CursorPositionZ: .5, Sequence: ns.VarInt(seq)}); err != nil {
 		return 0, err
 	}

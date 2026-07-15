@@ -94,7 +94,7 @@ func (b *Builder) Place(ctx context.Context, pos BlockPos, opt PlaceOptions) (Pl
 		}
 	})
 	defer unsubscribe()
-	sequence := b.bot.Miner.sequence.Add(1)
+	sequence := b.bot.nextSequence()
 	packet := &packets.C2SUseItemOn{
 		Hand: 0, Location: ns.NewPosition(support.X, support.Y, support.Z), Face: ns.VarInt(face),
 		CursorPositionX: ns.Float32(cursor.X), CursorPositionY: ns.Float32(cursor.Y), CursorPositionZ: ns.Float32(cursor.Z),

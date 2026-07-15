@@ -7,7 +7,7 @@ import (
 	"math"
 	"sort"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/zeozeozeo/minego/internal/data/versions/v26_2/packets"
@@ -29,9 +29,10 @@ type DigResult struct {
 	Duration time.Duration
 }
 type MiningProgress struct {
-	Kind                 string
+	Kind, Name           string
 	Position             BlockPos
 	Completed, Requested int
+	Err                  error
 }
 type Selector struct {
 	Names     []string
@@ -75,21 +76,70 @@ type digGoal struct{ target BlockPos }
 func (g digGoal) Reached(p BlockPos) bool {
 	dx, dy, dz := abs(p.X-g.target.X), abs(p.Y-g.target.Y), abs(p.Z-g.target.Z)
 	horizontal := max(dx, dz)
-	return horizontal >= 1 && horizontal <= 2 && dy <= 2
+	// Stay in an immediately neighboring column. Besides looking more like a
+	// player mining a block, this keeps ordinary block drops inside pickup
+	// range instead of leaving them scattered two or three blocks away.
+	return horizontal == 1 && dy <= 2
 }
 
 func (g digGoal) Estimate(p BlockPos) float64 {
-	return math.Max(0, distance(g.target, p)-2)
+	return math.Max(0, distance(g.target, p)-math.Sqrt2)
 }
 
 type Miner struct {
-	bot        *Bot
-	sequence   atomic.Int32
-	onProgress event[MiningProgress]
+	bot            *Bot
+	onProgress     event[MiningProgress]
+	rejectedMu     sync.RWMutex
+	rejected       map[BlockPos]struct{}
+	rejectedChunks map[chunkKey]struct{}
+	rejections     map[chunkKey]int
+	protected      []BlockPos
 }
 
-func newMiner(b *Bot) *Miner                               { return &Miner{bot: b} }
+func newMiner(b *Bot) *Miner {
+	return &Miner{bot: b, rejected: make(map[BlockPos]struct{}), rejectedChunks: make(map[chunkKey]struct{}), rejections: make(map[chunkKey]int)}
+}
 func (m *Miner) OnProgress(fn func(MiningProgress)) func() { return m.onProgress.subscribe(fn) }
+
+func (m *Miner) reject(pos BlockPos) {
+	m.rejectedMu.Lock()
+	if _, exists := m.rejected[pos]; exists {
+		m.rejectedMu.Unlock()
+		return
+	}
+	m.rejected[pos] = struct{}{}
+	// One missed block update is not enough evidence to discard a whole tree.
+	// Repeated refusals at distinct positions in one chunk are a useful signal
+	// for vanilla spawn protection or a claim plugin, though, so stop planning
+	// destructive edges through that chunk after three such refusals.
+	key := chunkKey{int32(pos.X >> 4), int32(pos.Z >> 4)}
+	m.rejections[key]++
+	if m.rejections[key] >= 3 {
+		m.rejectedChunks[key] = struct{}{}
+		if m.rejections[key] == 3 {
+			m.protected = append(m.protected, pos)
+		}
+	}
+	m.rejectedMu.Unlock()
+}
+
+func (m *Miner) breakRejected(pos BlockPos) bool {
+	m.rejectedMu.RLock()
+	_, rejected := m.rejected[pos]
+	if !rejected {
+		_, rejected = m.rejectedChunks[chunkKey{int32(pos.X >> 4), int32(pos.Z >> 4)}]
+	}
+	if !rejected {
+		for _, center := range m.protected {
+			if abs(pos.X-center.X) <= 16 && abs(pos.Z-center.Z) <= 16 {
+				rejected = true
+				break
+			}
+		}
+	}
+	m.rejectedMu.RUnlock()
+	return rejected
+}
 
 func (m *Miner) Dig(ctx context.Context, pos BlockPos, opt DigOptions) (DigResult, error) {
 	lease, err := m.bot.actions.acquire(ctx, controlView|controlHands, priorityExplicit)
@@ -102,7 +152,7 @@ func (m *Miner) Dig(ctx context.Context, pos BlockPos, opt DigOptions) (DigResul
 		opt.Reach = 4.5
 	}
 	if opt.Timeout <= 0 {
-		opt.Timeout = 30 * time.Second
+		opt.Timeout = 5 * time.Second
 	}
 	if !opt.Swing {
 		opt.Swing = true
@@ -123,8 +173,14 @@ func (m *Miner) Dig(ctx context.Context, pos BlockPos, opt DigOptions) (DigResul
 	if eye.Distance(center) > opt.Reach {
 		return DigResult{}, fmt.Errorf("minego: block outside reach")
 	}
-	if !m.lineOfSight(eye, center, pos) {
+	if _, obstructed := m.lineOfSightObstruction(eye, center, pos); obstructed {
 		return DigResult{}, fmt.Errorf("minego: line of sight is obstructed")
+	}
+	// A real client faces the block for the entire dig. This also makes the
+	// action intelligible to nearby players instead of leaving the bot staring
+	// in its previous travel direction while its hand swings.
+	if err := m.bot.Interaction.lookAt(ctx, center); err != nil {
+		return DigResult{}, err
 	}
 	tool, slot, speed := m.bestTool(block)
 	if block.RequiresCorrectTool && slot < 0 {
@@ -135,10 +191,11 @@ func (m *Miner) Dig(ctx context.Context, pos BlockPos, opt DigOptions) (DigResul
 			return DigResult{}, err
 		}
 	}
-	duration := breakDuration(block, speed, self)
-	seq := m.sequence.Add(1)
+	timingState := self
+	timingState.OnGround = m.bot.Navigator.grounded(self)
+	duration := breakDuration(block, speed, timingState)
 	face := opt.Face
-	if face < 0 || face > 5 {
+	if face <= 0 || face > 5 {
 		face = nearestFace(eye, center)
 	}
 	changed := make(chan struct{}, 1)
@@ -152,7 +209,7 @@ func (m *Miner) Dig(ctx context.Context, pos BlockPos, opt DigOptions) (DigResul
 	})
 	defer unsubscribe()
 	action := func(status int32) error {
-		return m.bot.send(ctx, &packets.C2SPlayerAction{Status: ns.VarInt(status), Location: ns.NewPosition(pos.X, pos.Y, pos.Z), Face: ns.Int8(face), Sequence: ns.VarInt(seq)})
+		return m.bot.send(ctx, &packets.C2SPlayerAction{Status: ns.VarInt(status), Location: ns.NewPosition(pos.X, pos.Y, pos.Z), Face: ns.Int8(face), Sequence: ns.VarInt(m.bot.nextSequence())})
 	}
 	if err := action(0); err != nil {
 		return DigResult{}, err
@@ -160,17 +217,27 @@ func (m *Miner) Dig(ctx context.Context, pos BlockPos, opt DigOptions) (DigResul
 	if opt.Swing {
 		_ = m.bot.send(ctx, &packets.C2SSwing{Hand: 0})
 	}
-	m.onProgress.emit(MiningProgress{Kind: "started", Position: pos})
+	m.onProgress.emit(MiningProgress{Kind: "started", Name: block.Name, Position: pos})
 	timer := time.NewTimer(duration)
 	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		_ = action(1)
-		return DigResult{}, ctx.Err()
-	case <-m.bot.done:
-		_ = action(1)
-		return DigResult{}, ErrNotConnected
-	case <-timer.C:
+	swing := time.NewTicker(250 * time.Millisecond)
+	defer swing.Stop()
+	digging := true
+	for digging {
+		select {
+		case <-ctx.Done():
+			_ = action(1)
+			return DigResult{}, ctx.Err()
+		case <-m.bot.done:
+			_ = action(1)
+			return DigResult{}, ErrNotConnected
+		case <-swing.C:
+			if opt.Swing {
+				_ = m.bot.send(ctx, &packets.C2SSwing{Hand: 0})
+			}
+		case <-timer.C:
+			digging = false
+		}
 	}
 	if err := action(2); err != nil {
 		return DigResult{}, err
@@ -184,9 +251,11 @@ func (m *Miner) Dig(ctx context.Context, pos BlockPos, opt DigOptions) (DigResul
 	case <-m.bot.done:
 		return DigResult{}, ErrNotConnected
 	case <-timeout.C:
-		return DigResult{}, fmt.Errorf("minego: server did not confirm block break")
+		m.reject(pos)
+		m.onProgress.emit(MiningProgress{Kind: "rejected", Name: block.Name, Position: pos})
+		return DigResult{}, fmt.Errorf("%w at %v", ErrBlockBreakRejected, pos)
 	case <-changed:
-		m.onProgress.emit(MiningProgress{Kind: "completed", Position: pos})
+		m.onProgress.emit(MiningProgress{Kind: "completed", Name: block.Name, Position: pos})
 		return DigResult{pos, block, tool, duration}, nil
 	}
 }
@@ -207,10 +276,19 @@ func (m *Miner) Mine(ctx context.Context, selector Selector, count int, opt Mine
 	defer cancel()
 	origin := m.bot.Self.State().Position.Block()
 	seen := map[BlockPos]bool{}
+	stagnantExploration := 0
 	for result.Completed < count {
 		targets := m.search(selector, seen)
-		mined := false
+		minedAny := false
 		for _, target := range targets {
+			if result.Completed >= count {
+				break
+			}
+			// A rejection may have marked this target's whole protected chunk
+			// after the candidate snapshot was built.
+			if m.breakRejected(target.Position) {
+				continue
+			}
 			seen[target.Position] = true
 			_, err := m.bot.Navigator.Navigate(ctx, digGoal{target.Position}, opt.Navigation)
 			if err != nil {
@@ -220,8 +298,12 @@ func (m *Miner) Mine(ctx context.Context, selector Selector, count int, opt Mine
 				}
 				continue
 			}
-			_, err = m.Dig(ctx, target.Position, opt.Dig)
+			err = m.clearLineOfSight(ctx, target.Position, opt.Navigation)
+			if err == nil {
+				_, err = m.Dig(ctx, target.Position, opt.Dig)
+			}
 			if err != nil {
+				m.onProgress.emit(MiningProgress{Kind: "failed", Name: target.Name, Position: target.Position, Completed: result.Completed, Requested: count, Err: err})
 				if errors.Is(err, ErrNotConnected) {
 					result.Status = MineDisconnected
 					return result, err
@@ -231,11 +313,11 @@ func (m *Miner) Mine(ctx context.Context, selector Selector, count int, opt Mine
 			result.Completed++
 			result.Mined = append(result.Mined, target.Position)
 			result.Blocks = append(result.Blocks, target)
-			m.onProgress.emit(MiningProgress{Kind: "target", Position: target.Position, Completed: result.Completed, Requested: count})
-			mined = true
-			break
+			m.onProgress.emit(MiningProgress{Kind: "target", Name: target.Name, Position: target.Position, Completed: result.Completed, Requested: count})
+			m.collectDrops(ctx, target.Position, opt.Navigation)
+			minedAny = true
 		}
-		if mined {
+		if minedAny {
 			continue
 		}
 		frontier, ok := m.frontier(origin, opt.ExplorationRadius)
@@ -243,8 +325,20 @@ func (m *Miner) Mine(ctx context.Context, selector Selector, count int, opt Mine
 			result.Status = MineExhausted
 			return result, ErrSearchExhausted
 		}
-		before := len(m.bot.World.LoadedChunks())
-		_, err := m.bot.Navigator.Navigate(ctx, GoalNear{frontier, 2}, opt.Navigation)
+		step, ok := m.explorationStep(m.bot.Self.State().Position.Block(), frontier, 24, opt.Navigation)
+		if !ok {
+			result.Status = MineExhausted
+			return result, ErrSearchExhausted
+		}
+		before := loadedChunkSet(m.bot.World.LoadedChunks())
+		m.onProgress.emit(MiningProgress{Kind: "exploring", Position: step, Completed: result.Completed, Requested: count})
+		exploreNav := opt.Navigation
+		// Exploration is deliberately incremental. A modest node budget keeps a
+		// distant loaded-chunk boundary from freezing the bot in one huge plan.
+		if exploreNav.MaxNodes <= 0 || exploreNav.MaxNodes > 6000 {
+			exploreNav.MaxNodes = 6000
+		}
+		_, err := m.bot.Navigator.Navigate(ctx, GoalNear{step, 2}, exploreNav)
 		if err != nil {
 			result.Status = MineUnreachable
 			return result, err
@@ -257,14 +351,60 @@ func (m *Miner) Mine(ctx context.Context, selector Selector, count int, opt Mine
 			return result, ctx.Err()
 		case <-wait.C:
 		}
-		if len(m.bot.World.LoadedChunks()) <= before {
-			result.Status = MineExhausted
-			return result, ErrSearchExhausted
+		added := newLoadedChunks(before, m.bot.World.LoadedChunks())
+		if added == 0 {
+			stagnantExploration++
+			if stagnantExploration >= 8 {
+				result.Status = MineExhausted
+				return result, ErrSearchExhausted
+			}
+		} else {
+			stagnantExploration = 0
+			result.ExploredChunks += added
 		}
-		result.ExploredChunks++
 	}
 	result.Status = MineComplete
 	return result, nil
+}
+
+func loadedChunkSet(chunks [][2]int32) map[[2]int32]struct{} {
+	set := make(map[[2]int32]struct{}, len(chunks))
+	for _, chunk := range chunks {
+		set[chunk] = struct{}{}
+	}
+	return set
+}
+
+func newLoadedChunks(before map[[2]int32]struct{}, after [][2]int32) int {
+	added := 0
+	for _, chunk := range after {
+		if _, existed := before[chunk]; !existed {
+			added++
+		}
+	}
+	return added
+}
+
+// explorationStep turns a potentially view-distance-sized frontier route into
+// a short walk. Repeating these steps loads terrain naturally as the player
+// approaches the edge of the current world view.
+func (m *Miner) explorationStep(from, frontier BlockPos, limit float64, nav NavigationOptions) (BlockPos, bool) {
+	dx, dz := float64(frontier.X-from.X), float64(frontier.Z-from.Z)
+	distanceXZ := math.Hypot(dx, dz)
+	if distanceXZ > limit {
+		dx *= limit / distanceXZ
+		dz *= limit / distanceXZ
+	}
+	x, z := from.X+int(math.Round(dx)), from.Z+int(math.Round(dz))
+	for offset := 0; offset <= 32; offset++ {
+		for _, y := range []int{from.Y + offset, from.Y - offset} {
+			candidate := BlockPos{x, y, z}
+			if _, _, ok := m.bot.Navigator.passable(candidate, nav); ok {
+				return candidate, true
+			}
+		}
+	}
+	return BlockPos{}, false
 }
 
 func (m *Miner) search(s Selector, skip map[BlockPos]bool) []Block {
@@ -296,7 +436,7 @@ func (m *Miner) search(s Selector, skip map[BlockPos]bool) []Block {
 			for z := 0; z < 16; z++ {
 				for x := 0; x < 16; x++ {
 					pos := BlockPos{int(key.X)*16 + x, y, int(key.Z)*16 + z}
-					if skip[pos] {
+					if skip[pos] || m.breakRejected(pos) {
 						continue
 					}
 					id := col.GetBlockState(x, y, z)
@@ -361,6 +501,11 @@ func (m *Miner) frontier(origin BlockPos, radius int) (BlockPos, bool) {
 	return result, found
 }
 func (m *Miner) lineOfSight(from, to Vec3, target BlockPos) bool {
+	_, obstructed := m.lineOfSightObstruction(from, to, target)
+	return !obstructed
+}
+
+func (m *Miner) lineOfSightObstruction(from, to Vec3, target BlockPos) (Block, bool) {
 	dist := from.Distance(to)
 	steps := int(dist / .1)
 	for i := 1; i < steps; i++ {
@@ -371,10 +516,119 @@ func (m *Miner) lineOfSight(from, to Vec3, target BlockPos) bool {
 		}
 		b, ok := m.bot.World.Block(p)
 		if !ok || len(b.Collision) > 0 {
-			return false
+			if !ok {
+				return Block{Position: p, Hardness: -1}, true
+			}
+			return b, true
 		}
 	}
-	return true
+	return Block{}, false
+}
+
+func (m *Miner) clearLineOfSight(ctx context.Context, pos BlockPos, nav NavigationOptions) error {
+	for range 8 {
+		self := m.bot.Self.State()
+		eye := Vec3{self.Position.X, self.Position.Y + 1.62, self.Position.Z}
+		center := Vec3{float64(pos.X) + .5, float64(pos.Y) + .5, float64(pos.Z) + .5}
+		blocker, obstructed := m.lineOfSightObstruction(eye, center, pos)
+		if !obstructed {
+			return nil
+		}
+		if !nav.AllowBreaking || blocker.Hardness < 0 || m.breakRejected(blocker.Position) || (nav.BreakFilter != nil && !nav.BreakFilter(blocker)) {
+			return fmt.Errorf("minego: line of sight to %v is obstructed by %s at %v", pos, blocker.Name, blocker.Position)
+		}
+		m.onProgress.emit(MiningProgress{Kind: "clearing", Name: blocker.Name, Position: blocker.Position})
+		if _, err := m.Dig(ctx, blocker.Position, DigOptions{}); err != nil {
+			return fmt.Errorf("clear %s at %v: %w", blocker.Name, blocker.Position, err)
+		}
+	}
+	return fmt.Errorf("minego: too many obstructions in front of %v", pos)
+}
+
+func (m *Miner) collectDrops(ctx context.Context, mined BlockPos, nav NavigationOptions) {
+	discoveryDeadline := time.Now().Add(250 * time.Millisecond)
+	seen := make(map[int32]bool)
+	for handled := 0; handled < 8; {
+		drop, found := m.nearbyDrop(mined, 8, seen)
+		if !found {
+			if time.Now().After(discoveryDeadline) {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(50 * time.Millisecond):
+				continue
+			}
+		}
+		seen[drop.ID] = true
+		m.collectDrop(ctx, drop, nav)
+		handled++
+		// Once one entity is collected, also drain any leaf or multi-item drops
+		// that spawned beside the same mined block without another discovery wait.
+		discoveryDeadline = time.Now()
+	}
+}
+
+func (m *Miner) nearbyDrop(mined BlockPos, radius float64, skip map[int32]bool) (Entity, bool) {
+	origin := Vec3{float64(mined.X) + .5, float64(mined.Y) + .5, float64(mined.Z) + .5}
+	best := radius
+	var result Entity
+	found := false
+	for _, entity := range m.bot.Entities.All() {
+		if entity.Type != "minecraft:item" || skip[entity.ID] {
+			continue
+		}
+		if d := entity.Position.Distance(origin); d < best {
+			best, result, found = d, entity, true
+		}
+	}
+	return result, found
+}
+
+func (m *Miner) collectDrop(ctx context.Context, drop Entity, nav NavigationOptions) {
+	// Item pickup is a local best-effort task. Keep an awkward drop under a
+	// canopy or down a ravine from monopolizing the miner with a full 30k-node
+	// search before it can continue to the next block.
+	if nav.MaxNodes <= 0 || nav.MaxNodes > 4000 {
+		nav.MaxNodes = 4000
+	}
+	for range 6 {
+		current, exists := m.bot.Entities.Get(drop.ID)
+		if !exists {
+			return
+		}
+		drop = current
+		m.onProgress.emit(MiningProgress{Kind: "collecting", Position: current.Position.Block()})
+		if _, err := m.bot.Navigator.Navigate(ctx, GoalNear{Position: current.Position.Block(), Radius: 1.25}, nav); err != nil {
+			m.onProgress.emit(MiningProgress{Kind: "drop-unreachable", Position: current.Position.Block(), Err: err})
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(250 * time.Millisecond):
+				continue
+			}
+		}
+		deadline := time.NewTimer(750 * time.Millisecond)
+		for {
+			if next, exists := m.bot.Entities.Get(drop.ID); !exists {
+				deadline.Stop()
+				return
+			} else {
+				drop = next
+			}
+			select {
+			case <-ctx.Done():
+				deadline.Stop()
+				return
+			case <-deadline.C:
+				goto retry
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+	retry:
+	}
+	m.onProgress.emit(MiningProgress{Kind: "drop-uncollected", Position: drop.Position.Block()})
 }
 func (m *Miner) bestTool(b Block) (ItemStack, int, float64) {
 	slots := m.bot.Inventory.Slots()
@@ -441,6 +695,12 @@ func breakDuration(b Block, speed float64, s SelfState) time.Duration {
 	}
 	if e, ok := s.Effects[4]; ok {
 		seconds *= math.Pow(.3, float64(e.Amplifier+1))
+	}
+	// The server applies the vanilla five-times mining penalty while airborne.
+	// This commonly matters for the first block after login, before the client
+	// has sent its first grounded movement tick, and while jump-pillaring.
+	if !s.OnGround && !s.Flying {
+		seconds *= 5
 	}
 	// The server applies destroy progress on tick boundaries. Keep mining for
 	// one extra tick so STOP_DESTROY_BLOCK cannot arrive before the final

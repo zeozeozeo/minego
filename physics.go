@@ -11,10 +11,11 @@ const (
 // position is deliberately absent: height is determined by gravity and
 // collision, never by the navigator.
 type physicsInput struct {
-	X, Z   float64
-	Jump   bool
-	Climb  float64
-	Sprint bool
+	X, Z         float64
+	LookX, LookZ float64
+	Jump         bool
+	Climb        float64
+	Sprint       bool
 }
 
 type physicsResult struct {

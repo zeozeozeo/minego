@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zeozeozeo/minego/internal/data/chunks"
 	"github.com/zeozeozeo/minego/internal/data/versions/v26_2/packets"
 	jp "github.com/zeozeozeo/minego/internal/protocol/java_protocol"
 )
@@ -76,6 +77,32 @@ func TestSubscriptionUnsubscribeIsIdempotent(t *testing.T) {
 	messages.emit(2)
 	if called != 2 {
 		t.Fatalf("handler called total = %d", called)
+	}
+}
+
+func TestReadyWaitsForPlayerChunk(t *testing.T) {
+	b := syntheticBot(t)
+	// Replace the synthetic world so position readiness alone cannot satisfy
+	// the gate, matching servers that send position before initial chunks.
+	b.World.mu.Lock()
+	b.World.chunks = map[chunkKey]*chunks.ChunkColumn{}
+	b.World.mu.Unlock()
+	b.Self.update(func(s *SelfState) { s.Position = Vec3{X: 8, Y: 64, Z: 8} })
+	b.positionReady.Store(true)
+	b.tryReady()
+	select {
+	case <-b.ready:
+		t.Fatal("bot became ready before its player chunk loaded")
+	default:
+	}
+	b.World.mu.Lock()
+	b.World.chunks[chunkKey{0, 0}] = &chunks.ChunkColumn{}
+	b.World.mu.Unlock()
+	b.tryReady()
+	select {
+	case <-b.ready:
+	default:
+		t.Fatal("bot did not become ready after its player chunk loaded")
 	}
 }
 

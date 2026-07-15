@@ -248,6 +248,7 @@ func (b *Bot) readLoop() {
 			hErr = b.handlePlay(wire)
 		}
 		if hErr != nil {
+			hErr = fmt.Errorf("handle state=%d packet=0x%02x bytes=%d: %w", state, wire.PacketID, len(wire.Data), hErr)
 			b.logError("packet handling failed", hErr)
 			_ = b.client.Close()
 			b.finish(DisconnectEvent{Reason: "protocol error", Err: hErr})

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -24,9 +25,36 @@ func main() {
 		log.Fatal(err)
 	}
 	defer bot.Close()
+	log.Printf("connected using Minecraft %s (protocol %d); waiting for initial world", bot.Version().Name, bot.Version().Protocol)
 	if err = bot.WaitReady(ctx); err != nil {
 		log.Fatal(err)
 	}
+	log.Printf("world ready at %+v", bot.Self.State().Position)
+	bot.OnDisconnect(func(event minego.DisconnectEvent) {
+		log.Printf("disconnected: %s: %v", event.Reason, event.Err)
+	})
+	announce := func(format string, args ...any) {
+		message := fmt.Sprintf(format, args...)
+		log.Print(message)
+		if err := bot.Chat.Send(ctx, message); err != nil {
+			log.Printf("send progress to chat: %v", err)
+		}
+	}
+	bot.Navigator.OnProgress(func(progress minego.PathProgress) {
+		log.Printf("path %d/%d position=(%.1f, %.1f, %.1f) target=%+v move=%d replan=%t", progress.Index, progress.Total, progress.Position.X, progress.Position.Y, progress.Position.Z, progress.Target, progress.Move, progress.Replanned)
+	})
+	bot.Miner.OnProgress(func(progress minego.MiningProgress) {
+		log.Printf("mining %s %s at %+v (%d/%d): %v", progress.Kind, progress.Name, progress.Position, progress.Completed, progress.Requested, progress.Err)
+		if progress.Kind == "target" && isLog(progress.Name) && (progress.Completed == 1 || progress.Completed%4 == 0 || progress.Completed == progress.Requested) {
+			announce("Mined logs: %d/%d", progress.Completed, progress.Requested)
+		}
+	})
+	bot.Builder.OnProgress(func(progress minego.BuildProgress) {
+		if progress.Completed == 1 || progress.Completed%10 == 0 || progress.Completed == progress.Total {
+			announce("Building house: %d/%d blocks", progress.Completed, progress.Total)
+		}
+	})
+	announce("Looking for a tree")
 	first, err := bot.Miner.Mine(ctx, minego.Tags("minecraft:logs"), 1, minego.MineOptions{Navigation: survivalNavigation()})
 	if err != nil || len(first.Blocks) == 0 {
 		log.Fatalf("find wood: %v", err)
@@ -35,20 +63,20 @@ func main() {
 	wood := woodFamily(logItem)
 	planks := "minecraft:" + wood + "_planks"
 	door := "minecraft:" + wood + "_door"
-	more, err := bot.Miner.Mine(ctx, minego.Blocks(logItem), 32, minego.MineOptions{Navigation: survivalNavigation()})
-	if err != nil {
-		log.Fatal(err)
-	}
-	pickup := first.Mined[0]
-	for _, p := range more.Mined {
-		if p.Y < pickup.Y {
-			pickup = p
+	announce("Found %s; collecting enough logs for the house", logItem)
+	for attempts := 0; itemCount(bot, logItem) < 33; attempts++ {
+		if attempts >= 4 {
+			log.Fatalf("could not collect enough %s: have %d/33", logItem, itemCount(bot, logItem))
 		}
+		missing := 33 - itemCount(bot, logItem)
+		if _, err := bot.Miner.Mine(ctx, minego.Blocks(logItem), missing, minego.MineOptions{Navigation: survivalNavigation()}); err != nil {
+			log.Fatal(err)
+		}
+		// Allow the final pickup packets to reach the inventory before deciding
+		// whether replacement logs are needed for drops lost down terrain.
+		_ = waitForItems(ctx, bot, logItem, 33, time.Second)
 	}
-	_, _ = bot.Navigator.Navigate(ctx, minego.GoalNear{Position: pickup, Radius: 1.5}, survivalNavigation())
-	if err = waitForItems(ctx, bot, logItem, 33); err != nil {
-		log.Fatal(err)
-	}
+	announce("Crafting planks and a crafting table")
 	if _, err = bot.Crafter.Craft(ctx, planks, 129, minego.CraftOptions{}); err != nil {
 		log.Fatal(err)
 	}
@@ -60,6 +88,7 @@ func main() {
 		log.Fatal(err)
 	}
 	table := minego.BlockPos{X: site.X + 8, Y: site.Y, Z: site.Z}
+	announce("Building at %d %d %d", site.X, site.Y, site.Z)
 	if _, err = bot.Builder.Build(ctx, table, minego.Blueprint{Name: "table", Blocks: []minego.BlueprintBlock{{Item: "minecraft:crafting_table"}}}, minego.BuildOptions{Navigation: survivalNavigation()}); err != nil {
 		log.Fatal(err)
 	}
@@ -71,10 +100,15 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("built %s house at %+v (%d blocks)", wood, site, result.Placed)
+	_ = bot.Chat.Send(ctx, fmt.Sprintf("Built the %s house at %d %d %d", wood, site.X, site.Y, site.Z))
 }
 
 func survivalNavigation() minego.NavigationOptions {
-	return minego.NavigationOptions{Sprint: true, AllowBreaking: true, AllowPlacing: true, AcquireTemporary: true, TemporaryBlocks: []string{"dirt", "cobblestone"}}
+	return minego.NavigationOptions{
+		Sprint: true, AllowBreaking: true, AllowPlacing: true, AcquireTemporary: true,
+		TemporaryBlocks: []string{"dirt", "cobblestone"},
+		BreakFilter:     func(block minego.Block) bool { return strings.HasSuffix(block.Name, "_leaves") },
+	}
 }
 func woodFamily(name string) string {
 	s := strings.TrimPrefix(name, "minecraft:")
@@ -84,19 +118,30 @@ func woodFamily(name string) string {
 	}
 	return s
 }
-func waitForItems(ctx context.Context, bot *minego.Bot, item string, count int) error {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+func isLog(name string) bool {
+	for _, suffix := range []string{"_log", "_wood", "_stem", "_hyphae"} {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+	return false
+}
+func itemCount(bot *minego.Bot, item string) int {
+	total := 0
+	for _, stack := range bot.Inventory.Slots() {
+		if stack.Name == item {
+			total += int(stack.Count)
+		}
+	}
+	return total
+}
+func waitForItems(ctx context.Context, bot *minego.Bot, item string, count int, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		total := 0
-		for _, stack := range bot.Inventory.Slots() {
-			if stack.Name == item {
-				total += int(stack.Count)
-			}
-		}
-		if total >= count {
+		if itemCount(bot, item) >= count {
 			return nil
 		}
 		select {

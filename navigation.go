@@ -3,6 +3,7 @@ package minego
 import (
 	"container/heap"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -70,7 +71,10 @@ type NavigationOptions struct {
 	AllowParkour  bool
 	MaxParkourGap int
 	AllowBreaking bool
-	AllowPlacing  bool
+	// BreakFilter optionally restricts blocks destroyed to execute a route.
+	// Explicit Miner targets are unaffected.
+	BreakFilter  func(Block) bool
+	AllowPlacing bool
 	// TemporaryBlocks lists block items that may be used for route bridges.
 	// Names without a namespace are treated as minecraft names.
 	TemporaryBlocks []string
@@ -360,10 +364,7 @@ func defaultsNav(o NavigationOptions) NavigationOptions {
 }
 
 func (n *Navigator) ensureTemporary(ctx context.Context, path []PathNode, opt NavigationOptions) error {
-	need := 0
-	for _, node := range path {
-		need += len(node.Place)
-	}
+	need := pathTemporaryCount(path)
 	if need == 0 {
 		return nil
 	}
@@ -407,6 +408,28 @@ func (n *Navigator) ensureTemporary(ctx context.Context, path []PathNode, opt Na
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
+}
+
+func pathTemporaryCount(path []PathNode) int {
+	need := 0
+	for _, node := range path {
+		need += len(node.Place)
+	}
+	return need
+}
+
+func (n *Navigator) availableTemporary(opt NavigationOptions) int {
+	allowed := make(map[string]bool, len(opt.TemporaryBlocks))
+	for _, name := range opt.TemporaryBlocks {
+		allowed[name] = true
+	}
+	have := 0
+	for _, stack := range n.bot.Inventory.Slots() {
+		if allowed[stack.Name] {
+			have += int(stack.Count)
+		}
+	}
+	return have
 }
 func (n *Navigator) finish(err error) {
 	n.mu.Lock()
@@ -464,6 +487,17 @@ func (n *Navigator) tick() {
 		} else {
 			path, segmented, expanded, planner, err = n.planRoute(at, r.goal, r.options)
 		}
+		// A live replan can introduce a bridge or pillar that was absent from
+		// the original route. Acquiring material here would recursively replace
+		// the active navigation run, so prefer a jump/walk detour whenever the
+		// inventory cannot execute the newly planned placements.
+		if err == nil && pathTemporaryCount(path) > n.availableTemporary(r.options) {
+			withoutPlacement := r.options
+			withoutPlacement.AllowPlacing = false
+			var extra int
+			path, segmented, extra, planner, err = n.planRoute(at, r.goal, withoutPlacement)
+			expanded += extra
+		}
 		if err != nil {
 			n.active = nil
 			n.mu.Unlock()
@@ -473,6 +507,8 @@ func (n *Navigator) tick() {
 		r.path = path
 		r.result.Path = path
 		r.index = 1
+		r.actionIndex = 0
+		r.jumpIndex = -1
 		r.result.Replans++
 		r.result.Expanded += expanded
 		r.replanned = true
@@ -507,6 +543,10 @@ func (n *Navigator) tick() {
 			}
 			r.digging = false
 			if err != nil {
+				if errors.Is(err, ErrBlockBreakRejected) && r.index == idx {
+					r.dirty = true
+					return
+				}
 				n.active = nil
 				r.done <- err
 				return
@@ -533,16 +573,28 @@ func (n *Navigator) tick() {
 		go func() {
 			var err error
 			if target.Move == MovePillar {
-				select {
-				case <-r.ctx.Done():
-					err = r.ctx.Err()
-				case <-time.After(300 * time.Millisecond):
+				clearance := time.NewTimer(time.Second)
+				defer clearance.Stop()
+				for n.bot.Self.State().Position.Y < float64(places[0].Y)+1.01 {
+					select {
+					case <-r.ctx.Done():
+						err = r.ctx.Err()
+					case <-clearance.C:
+						err = fmt.Errorf("minego: pillar jump did not clear placement cell")
+					case <-time.After(25 * time.Millisecond):
+					}
+					if err != nil {
+						break
+					}
 				}
 			}
 			for _, pos := range places {
+				if err != nil {
+					break
+				}
 				item := ""
 				for _, candidate := range r.options.TemporaryBlocks {
-					if _, _, e := n.bot.Builder.placementItem(candidate); e == nil {
+					if e := n.bot.Builder.ensureHotbar(r.ctx, candidate); e == nil {
 						item = candidate
 						break
 					}
@@ -576,7 +628,7 @@ func (n *Navigator) tick() {
 	}
 	if target.Move == MoveDoor && r.actionIndex != r.index {
 		r.actionIndex = r.index
-		seq := n.bot.Miner.sequence.Add(1)
+		seq := n.bot.nextSequence()
 		_ = n.bot.send(context.Background(), &packets.C2SUseItemOn{Hand: 0, Location: ns.NewPosition(target.Position.X, target.Position.Y, target.Position.Z), Face: 1, CursorPositionX: .5, CursorPositionY: .5, CursorPositionZ: .5, Sequence: ns.VarInt(seq)})
 	}
 	dx := float64(target.Position.X) + .5 - state.Position.X
@@ -612,15 +664,26 @@ func (n *Navigator) tick() {
 		dx = dx / dist * math.Min(speed, dist)
 		dz = dz / dist * math.Min(speed, dist)
 	}
-	input := physicsInput{X: dx, Z: dz}
+	input := physicsInput{X: dx, Z: dz, LookX: dx, LookZ: dz}
 	input.Sprint = r.options.Sprint
 	if target.Move == MoveJump && target.Position.Y > at.Y {
-		input.Jump = true
-		// Clear the obstacle vertically before translating across its upper
-		// edge. Sending a simultaneous edge-touching rise is repeatedly
-		// corrected by Paper and leaves the player frozen at jump-frame one.
-		if state.Position.Y < float64(target.Position.Y)-0.05 {
-			input.X, input.Z = 0, 0
+		centered := true
+		if n.grounded(state) && r.index > 0 {
+			centering, atCenter := centerNodeInput(state, r.path[r.index-1].Position, speed)
+			centered = atCenter
+			if !centered {
+				input = centering
+				input.Sprint = false
+			}
+		}
+		if centered {
+			input.Jump = true
+			// Clear the obstacle vertically before translating across its upper
+			// edge. Sending a simultaneous edge-touching rise is repeatedly
+			// corrected by Paper and leaves the player frozen at jump-frame one.
+			if state.Position.Y < float64(target.Position.Y)-0.05 {
+				input.X, input.Z = 0, 0
+			}
 		}
 	}
 	if target.Move == MoveSwim {
@@ -640,12 +703,22 @@ func (n *Navigator) tick() {
 	n.move(input, state)
 }
 
-func (n *Navigator) move(input physicsInput, state SelfState) {
-	result := n.physicsStep(state, input)
-	yaw := state.Rotation.Yaw
-	if input.X != 0 || input.Z != 0 {
-		yaw = float32(math.Atan2(-input.X, input.Z) * 180 / math.Pi)
+func centerNodeInput(state SelfState, node BlockPos, speed float64) (physicsInput, bool) {
+	dx := float64(node.X) + .5 - state.Position.X
+	dz := float64(node.Z) + .5 - state.Position.Z
+	dist := math.Hypot(dx, dz)
+	if dist <= .08 {
+		return physicsInput{}, true
 	}
+	step := math.Min(speed, dist)
+	dx, dz = dx/dist*step, dz/dist*step
+	return physicsInput{X: dx, Z: dz, LookX: dx, LookZ: dz}, false
+}
+
+func (n *Navigator) move(input physicsInput, state SelfState) {
+	grounded := n.grounded(state)
+	input, yaw, pitch := orientMovement(input, state, grounded)
+	result := n.physicsStep(state, input)
 	flags := ns.Int8(0)
 	if result.OnGround {
 		flags |= 1
@@ -676,13 +749,69 @@ func (n *Navigator) move(input physicsInput, state SelfState) {
 	if err := n.bot.send(context.Background(), &packets.C2SPlayerInput{Flags: inputFlags}); err != nil {
 		return
 	}
-	if err := n.bot.send(context.Background(), &packets.C2SMovePlayerPosRot{X: ns.Float64(result.Position.X), FeetY: ns.Float64(result.Position.Y), Z: ns.Float64(result.Position.Z), Yaw: ns.Float32(yaw), Pitch: ns.Float32(state.Rotation.Pitch), Flags: flags}); err != nil {
+	if err := n.bot.send(context.Background(), &packets.C2SMovePlayerPosRot{X: ns.Float64(result.Position.X), FeetY: ns.Float64(result.Position.Y), Z: ns.Float64(result.Position.Z), Yaw: ns.Float32(yaw), Pitch: ns.Float32(pitch), Flags: flags}); err != nil {
 		return
 	}
 	n.bot.Self.update(func(s *SelfState) {
 		s.Position, s.Velocity, s.OnGround = result.Position, result.Velocity, result.OnGround
-		s.Rotation.Yaw = yaw
+		s.Rotation = Rotation{Yaw: yaw, Pitch: pitch}
 	})
+}
+
+func (n *Navigator) grounded(state SelfState) bool {
+	return state.OnGround || n.hasSupport(playerBox(state.Position))
+}
+
+func orientMovement(input physicsInput, state SelfState, grounded bool) (physicsInput, float32, float32) {
+	yaw := state.Rotation.Yaw
+	pitch := state.Rotation.Pitch
+	lookX, lookZ := input.LookX, input.LookZ
+	if lookX == 0 && lookZ == 0 {
+		lookX, lookZ = input.X, input.Z
+	}
+	if lookX != 0 || lookZ != 0 {
+		desiredYaw := float32(math.Atan2(-lookX, lookZ) * 180 / math.Pi)
+		// Turn over several client ticks and bring the view back toward the
+		// horizon. This keeps movement camera-driven without the instantaneous
+		// head snaps produced by assigning the destination angle directly.
+		yaw = approachAngle(yaw, desiredYaw, 30)
+		pitch = approach(pitch, 0, 12)
+		// Modern servers validate the forward-input bit against the reported
+		// camera direction. Turn in place first when the requested direction is
+		// far outside the current view instead of sending sideways coordinates
+		// while claiming to move forward.
+		if math.Abs(float64(angleDelta(state.Rotation.Yaw, desiredYaw))) > 5 {
+			input.X, input.Z = 0, 0
+			// Do not spend the useful airborne part of an obstacle jump turning
+			// in place. Face the target while grounded, then take off.
+			if grounded {
+				input.Jump = false
+			}
+		}
+	}
+	return input, yaw, pitch
+}
+
+func approach(value, target, limit float32) float32 {
+	delta := target - value
+	if delta > limit {
+		delta = limit
+	} else if delta < -limit {
+		delta = -limit
+	}
+	return value + delta
+}
+
+func approachAngle(value, target, limit float32) float32 {
+	return value + approach(0, angleDelta(value, target), limit)
+}
+
+func angleDelta(value, target float32) float32 {
+	delta := float32(math.Mod(float64(target-value+180), 360))
+	if delta < 0 {
+		delta += 360
+	}
+	return delta - 180
 }
 
 type pathEntry struct {
@@ -713,7 +842,7 @@ func (n *Navigator) findPathCount(start BlockPos, goal Goal, opt NavigationOptio
 	for open.Len() > 0 {
 		cur := heap.Pop(open).(*pathEntry)
 		if goal.Reached(cur.pos) {
-			return buildPath(cur), explored, nil
+			return n.buildPath(cur), explored, nil
 		}
 		explored++
 		if explored > opt.MaxNodes {
@@ -790,10 +919,13 @@ func (n *Navigator) segmentFrontier(start BlockPos, goal Goal) (BlockPos, bool) 
 	}
 	return result, found
 }
-func buildPath(end *pathEntry) []PathNode {
+func (n *Navigator) buildPath(end *pathEntry) []PathNode {
 	var p []PathNode
 	for x := end; x != nil; x = x.parent {
-		p = append(p, PathNode{Position: x.pos, Move: x.move, Cost: x.g})
+		// Rehydrate execution actions that are derived from the selected move.
+		// A* entries store only graph costs and move kinds; omitting this step
+		// turns MoveBreak/MoveBridge/MovePillar into impossible plain movement.
+		p = append(p, n.pathNode(x.pos, x.move, x.g))
 	}
 	for i, j := 0, len(p)-1; i < j; i, j = i+1, j-1 {
 		p[i], p[j] = p[j], p[i]
@@ -813,17 +945,35 @@ func (n *Navigator) neighbors(p BlockPos, opt NavigationOptions) []PathNode {
 			multiplier = math.Sqrt2
 		}
 		q := BlockPos{p.X + d[0], p.Y, p.Z + d[1]}
-		if move, cost, ok := n.passable(q, opt); ok {
-			out = append(out, n.pathNode(q, move, cost*multiplier))
+		move, sameCost, sameLevel := n.passable(q, opt)
+		if sameLevel && move != MoveBreak {
+			out = append(out, n.pathNode(q, move, sameCost*multiplier))
 			continue
 		}
 		q.Y++
-		if _, cost, ok := n.passable(q, opt); ok && n.clear(BlockPos{p.X, p.Y + 2, p.Z}) {
+		jumpClear := n.clear(BlockPos{p.X, p.Y + 2, p.Z})
+		if diagonal {
+			jumpClear = jumpClear && n.diagonalClear(BlockPos{p.X, p.Y + 1, p.Z}, d[0], d[1])
+		}
+		if _, cost, ok := n.passable(q, opt); ok && jumpClear {
 			out = append(out, n.pathNode(q, MoveJump, (cost+1.5)*multiplier))
+			continue
+		}
+		if sameLevel {
+			q.Y--
+			out = append(out, n.pathNode(q, move, sameCost*multiplier))
 			continue
 		}
 		for drop := 1; drop <= opt.MaxDrop; drop++ {
 			q.Y = p.Y - drop
+			// The player first has to move horizontally into the destination
+			// column at the departure height. Checking only the eventual landing
+			// cells can plan an impossible drop beneath an overhanging log/leaf,
+			// where the player's head remains wedged against the upper block.
+			departure := BlockPos{q.X, p.Y, q.Z}
+			if !n.bodyClear(departure) {
+				continue
+			}
 			if _, cost, ok := n.passable(q, opt); ok {
 				out = append(out, n.pathNode(q, MoveDrop, (cost+float64(drop)*.4)*multiplier))
 				break
@@ -891,6 +1041,9 @@ func (n *Navigator) pathNode(pos BlockPos, move MoveKind, cost float64) PathNode
 	if move == MoveBridge {
 		node.Place = []BlockPos{{pos.X, pos.Y - 1, pos.Z}}
 	}
+	if move == MovePillar {
+		node.Place = []BlockPos{{pos.X, pos.Y - 1, pos.Z}}
+	}
 	return node
 }
 
@@ -918,13 +1071,13 @@ func (n *Navigator) passable(p BlockPos, opt NavigationOptions) (MoveKind, float
 	fluid := isFluid(feet.Name)
 	door := strings.HasSuffix(feet.Name, "_door")
 	if !n.blockClear(feet) && !fluid && !door {
-		if opt.AllowBreaking && feet.Hardness >= 0 {
+		if opt.AllowBreaking && feet.Hardness >= 0 && !n.bot.Miner.breakRejected(p) && (opt.BreakFilter == nil || opt.BreakFilter(feet)) {
 			return MoveBreak, 2 + float64(feet.Hardness)*2, true
 		}
 		return 0, 0, false
 	}
 	if !n.blockClear(head) && !isFluid(head.Name) {
-		if !(opt.AllowBreaking && head.Hardness >= 0) {
+		if !(opt.AllowBreaking && head.Hardness >= 0 && !n.bot.Miner.breakRejected(BlockPos{p.X, p.Y + 1, p.Z}) && (opt.BreakFilter == nil || opt.BreakFilter(head))) {
 			return 0, 0, false
 		}
 	}

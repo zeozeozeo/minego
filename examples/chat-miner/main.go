@@ -53,7 +53,11 @@ func (c *controller) requestBlock(name string) {
 
 func (c *controller) mine(ctx context.Context, id uint64, name string) {
 	result, err := c.bot.Miner.Mine(ctx, minego.Blocks(name), 1, minego.MineOptions{
-		Navigation: minego.NavigationOptions{Sprint: true, MaxDrop: 3, AllowParkour: true, MaxParkourGap: 2},
+		Navigation: minego.NavigationOptions{
+			Sprint: true, MaxDrop: 3, AllowParkour: true, MaxParkourGap: 2,
+			AllowBreaking: true, AllowPlacing: true, AcquireTemporary: true,
+			TemporaryBlocks: []string{"dirt", "cobblestone"},
+		},
 	})
 
 	c.mu.Lock()
@@ -103,7 +107,7 @@ func main() {
 		log.Printf("path %d/%d position=(%.3f, %.3f, %.3f) target=%+v move=%d replan=%t", progress.Index, progress.Total, progress.Position.X, progress.Position.Y, progress.Position.Z, progress.Target, progress.Move, progress.Replanned)
 	})
 	bot.Miner.OnProgress(func(progress minego.MiningProgress) {
-		log.Printf("mining %s at %+v (%d/%d)", progress.Kind, progress.Position, progress.Completed, progress.Requested)
+		log.Printf("mining %s %s at %+v (%d/%d): %v", progress.Kind, progress.Name, progress.Position, progress.Completed, progress.Requested, progress.Err)
 	})
 
 	if err := bot.Connect(ctx); err != nil {

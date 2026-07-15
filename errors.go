@@ -28,6 +28,7 @@ var (
 	ErrNoElytra              = errors.New("minego: no elytra is available")
 	ErrNoFireworks           = errors.New("minego: no firework rockets are available in the hotbar")
 	ErrNoSafeLanding         = errors.New("minego: no safe elytra landing site was found")
+	ErrBlockBreakRejected    = errors.New("minego: server rejected block break")
 	ErrNoBuildSite           = errors.New("minego: no free build site was found")
 	ErrBuildObstructed       = errors.New("minego: blueprint is obstructed")
 	ErrUnsupportedFeature    = errors.New("minego: unsupported feature")

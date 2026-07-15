@@ -3,6 +3,7 @@ package minego
 import (
 	"context"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/zeozeozeo/minego/internal/data/chunks"
@@ -36,6 +37,19 @@ func TestPathAroundObstacle(t *testing.T) {
 	}
 	if len(p) < 3 || p[1].Move != MoveJump {
 		t.Fatalf("expected a legal jump or detour, got %#v", p)
+	}
+}
+
+func TestPathPrefersJumpOverBreakingOrPillaringOneBlockRise(t *testing.T) {
+	b := syntheticBot(t)
+	stone, _ := b.pack.StateID("minecraft:stone", nil)
+	b.World.chunks[chunkKey{0, 0}].SetBlockState(2, 64, 1, stone)
+	path, err := b.Navigator.Path(BlockPos{1, 64, 1}, GoalBlock(BlockPos{2, 65, 1}), NavigationOptions{AllowBreaking: true, AllowPlacing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(path) != 2 || path[1].Move != MoveJump {
+		t.Fatalf("one-block terrain rise should be jumped, got %#v", path)
 	}
 }
 func TestPathCancellation(t *testing.T) {
@@ -87,6 +101,43 @@ func TestPhysicsJumpUsesCollisionSupport(t *testing.T) {
 	got := b.Navigator.physicsStep(state, physicsInput{Jump: true})
 	if got.Position.Y <= state.Position.Y || got.Velocity.Y <= 0 {
 		t.Fatalf("supported player failed to jump: %#v", got)
+	}
+}
+
+func TestGroundedUsesCollisionSupportForMiningAndJumping(t *testing.T) {
+	b := syntheticBot(t)
+	state := SelfState{Position: Vec3{1.5, 64, 1.5}, OnGround: false}
+	if !b.Navigator.grounded(state) {
+		t.Fatal("supported player was treated as airborne")
+	}
+}
+
+func TestObstacleJumpTurnsBeforeTakeoff(t *testing.T) {
+	input := physicsInput{LookX: 1, Jump: true}
+	state := SelfState{Rotation: Rotation{Yaw: 0}, OnGround: true}
+	oriented, yaw, _ := orientMovement(input, state, true)
+	if yaw != -30 {
+		t.Fatalf("first turn yaw = %v, want -30", yaw)
+	}
+	if oriented.Jump {
+		t.Fatal("jump began before the bot faced the obstacle")
+	}
+	state.Rotation.Yaw = -90
+	oriented, _, _ = orientMovement(input, state, true)
+	if !oriented.Jump {
+		t.Fatal("jump remained suppressed after the bot faced the obstacle")
+	}
+}
+
+func TestObstacleJumpCentersDepartureBeforeTakeoff(t *testing.T) {
+	state := SelfState{Position: Vec3{1.82, 64, 1.18}, OnGround: true}
+	input, centered := centerNodeInput(state, BlockPos{1, 64, 1}, .215)
+	if centered || input.X >= 0 || input.Z <= 0 {
+		t.Fatalf("off-center jump did not steer toward node center: centered=%t input=%#v", centered, input)
+	}
+	state.Position = Vec3{1.54, 64, 1.46}
+	if _, centered = centerNodeInput(state, BlockPos{1, 64, 1}, .215); !centered {
+		t.Fatal("centered player was not allowed to take off")
 	}
 }
 
@@ -200,6 +251,53 @@ func TestPathDoesNotCutBlockedDiagonalCorner(t *testing.T) {
 	}
 }
 
+func TestDiagonalJumpRequiresSweptHeadClearance(t *testing.T) {
+	b := syntheticBot(t)
+	stone, _ := b.pack.StateID("minecraft:stone", nil)
+	start := BlockPos{1, 64, 1}
+	target := BlockPos{2, 65, 2}
+	b.World.chunks[chunkKey{0, 0}].SetBlockState(2, 64, 2, stone)
+	options := defaultsNav(NavigationOptions{})
+	if !hasMoveTo(b.Navigator.neighbors(start, options), target, MoveJump) {
+		t.Fatal("clear diagonal rise was not offered to the planner")
+	}
+	// This ceiling is beside the departure node. It does not occupy the start
+	// or landing column, but the player's head sweeps through it diagonally.
+	b.World.chunks[chunkKey{0, 0}].SetBlockState(2, 66, 1, stone)
+	if hasMoveTo(b.Navigator.neighbors(start, options), target, MoveJump) {
+		t.Fatal("diagonal jump clipped through side ceiling")
+	}
+}
+
+func TestDropRequiresClearDepartureColumn(t *testing.T) {
+	b := syntheticBot(t)
+	stone, _ := b.pack.StateID("minecraft:stone", nil)
+	// Stand two blocks above the ordinary floor and consider dropping into the
+	// neighboring column.
+	b.World.chunks[chunkKey{0, 0}].SetBlockState(1, 65, 1, stone)
+	start := BlockPos{1, 66, 1}
+	landing := BlockPos{2, 64, 1}
+	options := defaultsNav(NavigationOptions{})
+	if !hasMoveTo(b.Navigator.neighbors(start, options), landing, MoveDrop) {
+		t.Fatal("clear two-block drop was not planned")
+	}
+	// The landing itself remains clear, but this block catches the player's
+	// head before it can step off the upper ledge.
+	b.World.chunks[chunkKey{0, 0}].SetBlockState(2, 67, 1, stone)
+	if hasMoveTo(b.Navigator.neighbors(start, options), landing, MoveDrop) {
+		t.Fatal("drop was planned through an obstructed departure column")
+	}
+}
+
+func hasMoveTo(nodes []PathNode, position BlockPos, move MoveKind) bool {
+	for _, node := range nodes {
+		if node.Position == position && node.Move == move {
+			return true
+		}
+	}
+	return false
+}
+
 func TestPathPlansBoundedParkourGap(t *testing.T) {
 	b := syntheticBot(t)
 	air, _ := b.pack.StateID("minecraft:air", nil)
@@ -231,6 +329,38 @@ func TestPhysicsSprintJumpCrossesTwoBlockGap(t *testing.T) {
 	}
 }
 
+func TestNavigationCameraTurnsShortestWayAndLevelsPitch(t *testing.T) {
+	if got := approachAngle(170, -170, 30); got != 190 {
+		t.Fatalf("wrapped yaw = %v, want 190", got)
+	}
+	if got := approachAngle(-170, 170, 30); got != -190 {
+		t.Fatalf("reverse wrapped yaw = %v, want -190", got)
+	}
+	if got := approach(45, 0, 12); got != 33 {
+		t.Fatalf("leveled pitch = %v, want 33", got)
+	}
+	if got := angleDelta(90, -90); got != -180 {
+		t.Fatalf("opposite-direction delta = %v, want -180", got)
+	}
+}
+
+func TestPathAvoidsServerRejectedBreak(t *testing.T) {
+	b := syntheticBot(t)
+	stone, _ := b.pack.StateID("minecraft:stone", nil)
+	rejected := BlockPos{2, 64, 1}
+	b.World.chunks[chunkKey{0, 0}].SetBlockState(rejected.X, rejected.Y, rejected.Z, stone)
+	b.Miner.reject(rejected)
+	path, err := b.Navigator.Path(BlockPos{1, 64, 1}, GoalBlock(BlockPos{3, 64, 1}), NavigationOptions{AllowBreaking: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, node := range path {
+		if node.Position == rejected {
+			t.Fatalf("path retained rejected protected block: %#v", path)
+		}
+	}
+}
+
 func TestBridgeAndTwoBlockDigActions(t *testing.T) {
 	b := syntheticBot(t)
 	air, _ := b.pack.StateID("minecraft:air", nil)
@@ -254,6 +384,75 @@ func TestBridgeAndTwoBlockDigActions(t *testing.T) {
 	node = b.Navigator.pathNode(BlockPos{2, 64, 1}, move, 4)
 	if len(node.Break) != 2 {
 		t.Fatalf("expected feet and head dig actions, got %#v", node.Break)
+	}
+}
+
+type customBlockGoal BlockPos
+
+func (g customBlockGoal) Reached(p BlockPos) bool     { return p == BlockPos(g) }
+func (g customBlockGoal) Estimate(p BlockPos) float64 { return distance(p, BlockPos(g)) }
+
+func TestAStarPathRetainsBreakActions(t *testing.T) {
+	b := syntheticBot(t)
+	stone, _ := b.pack.StateID("minecraft:stone", nil)
+	for z := 0; z < 16; z++ {
+		b.World.chunks[chunkKey{0, 0}].SetBlockState(2, 64, z, stone)
+		b.World.chunks[chunkKey{0, 0}].SetBlockState(2, 65, z, stone)
+	}
+	path, err := b.Navigator.Path(BlockPos{1, 64, 1}, customBlockGoal(BlockPos{3, 64, 1}), NavigationOptions{AllowBreaking: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, node := range path {
+		if len(node.Break) > 0 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("A* path discarded break actions: %#v", path)
+	}
+}
+
+func TestAStarBreakFilterRejectsGroundAndAllowsLeaves(t *testing.T) {
+	b := syntheticBot(t)
+	stone, _ := b.pack.StateID("minecraft:stone", nil)
+	leaves, _ := b.pack.StateID("minecraft:spruce_leaves", nil)
+	for z := 0; z < 16; z++ {
+		b.World.chunks[chunkKey{0, 0}].SetBlockState(2, 64, z, stone)
+		b.World.chunks[chunkKey{0, 0}].SetBlockState(2, 65, z, stone)
+	}
+	filter := func(block Block) bool { return strings.HasSuffix(block.Name, "_leaves") }
+	goal := customBlockGoal(BlockPos{3, 64, 1})
+	if _, err := b.Navigator.Path(BlockPos{1, 64, 1}, goal, NavigationOptions{AllowBreaking: true, BreakFilter: filter}); err == nil {
+		t.Fatal("filtered path broke non-leaf terrain")
+	}
+	for y := 64; y <= 65; y++ {
+		b.World.chunks[chunkKey{0, 0}].SetBlockState(2, y, 1, leaves)
+	}
+	path, err := b.Navigator.Path(BlockPos{1, 64, 1}, goal, NavigationOptions{AllowBreaking: true, BreakFilter: filter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(path) < 2 || len(path[1].Break) == 0 {
+		t.Fatalf("leaf opening was not planned as a break: %#v", path)
+	}
+}
+
+func TestAStarPathRetainsPillarActions(t *testing.T) {
+	b := syntheticBot(t)
+	path, err := b.Navigator.Path(BlockPos{1, 64, 1}, customBlockGoal(BlockPos{1, 66, 1}), NavigationOptions{AllowPlacing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, node := range path {
+		if node.Move == MovePillar && len(node.Place) == 1 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("A* path discarded pillar placement: %#v", path)
 	}
 }
 

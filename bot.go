@@ -36,6 +36,7 @@ type Bot struct {
 	chatSession                 ns.UUID
 	chatIndex                   atomic.Int32
 	respawning                  atomic.Bool
+	positionReady               atomic.Bool
 	actions                     *actionCoordinator
 	servicesMu                  sync.RWMutex
 	services                    map[string]any
@@ -175,6 +176,20 @@ func (b *Bot) WaitReady(ctx context.Context) error {
 	case <-b.done:
 		return ErrNotConnected
 	}
+}
+func (b *Bot) tryReady() {
+	if !b.positionReady.Load() || !b.World.IsLoaded(b.Self.State().Position.Block()) {
+		return
+	}
+	b.readyOnce.Do(func() {
+		close(b.ready)
+		b.mu.RLock()
+		connected := b.connected && b.ctx != nil
+		b.mu.RUnlock()
+		if connected {
+			go b.tickLoop()
+		}
+	})
 }
 func (b *Bot) Done() <-chan struct{}                        { return b.done }
 func (b *Bot) OnDisconnect(fn func(DisconnectEvent)) func() { return b.onDisconnect.subscribe(fn) }

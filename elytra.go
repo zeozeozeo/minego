@@ -181,7 +181,7 @@ func (e *Elytra) Fly(ctx context.Context, goal Goal, opt ElytraOptions) (ElytraR
 	}
 }
 func (e *Elytra) useRocket(ctx context.Context, state SelfState) error {
-	seq := e.bot.Miner.sequence.Add(1)
+	seq := e.bot.nextSequence()
 	return e.bot.send(ctx, &packets.C2SUseItem{Hand: 0, Sequence: ns.VarInt(seq), Yaw: ns.Float32(state.Rotation.Yaw), Pitch: ns.Float32(state.Rotation.Pitch)})
 }
 func (e *Elytra) swapInventory(ctx context.Context, a, b int) (func() error, error) {
