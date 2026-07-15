@@ -17,7 +17,8 @@ func (v1_21_11) Descriptor() version.Descriptor {
 	return version.NewDescriptor("1.21.11", 774,
 		version.FeatureStatus, version.FeatureConfiguration, version.FeatureSignedChat,
 		version.FeatureRuntimeRegistry, version.FeatureWorld, version.FeatureInventory,
-		version.FeatureNavigation, version.FeatureMining, version.FeatureBuilding)
+		version.FeatureNavigation, version.FeatureMining, version.FeatureBuilding,
+		version.FeatureInteractions, version.FeatureCombat, version.FeatureContainers, version.FeatureRiding)
 }
 func (v1_21_11) Name() string    { return "1.21.11" }
 func (v1_21_11) Protocol() int32 { return 774 }

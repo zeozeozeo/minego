@@ -20,6 +20,9 @@ type SelfState struct {
 	GameMode     uint8
 	SelectedSlot int
 	Flying       bool
+	CanFly       bool
+	FlyingSpeed  float32
+	VehicleID    int32
 	Effects      map[int32]Effect
 }
 type Self struct {

@@ -133,13 +133,40 @@ func (b *Bot) handlePlay(w *jp.WirePacket) error {
 		return b.handleInventoryContent(w)
 	case packet_ids.S2CContainerSetSlotID:
 		return b.handleInventorySlot(w)
+	case packet_ids.S2CContainerSetDataID:
+		var p packets.S2CContainerSetData
+		if err := w.ReadInto(&p); err != nil {
+			return err
+		}
+		b.Inventory.mu.Lock()
+		if int32(p.WindowId) == b.Inventory.window.ID {
+			if b.Inventory.window.Properties == nil {
+				b.Inventory.window.Properties = make(map[int16]int16)
+			}
+			b.Inventory.window.Properties[int16(p.Property)] = int16(p.Value)
+		}
+		snapshot := cloneWindow(b.Inventory.window)
+		b.Inventory.mu.Unlock()
+		b.Inventory.onWindow.emit(WindowChange{Window: snapshot})
+	case packet_ids.S2CMerchantOffersID:
+		var p packets.S2CMerchantOffers
+		if err := w.ReadInto(&p); err != nil {
+			return err
+		}
+		b.Inventory.mu.Lock()
+		if int32(p.WindowId) == b.Inventory.window.ID {
+			b.Inventory.window.Offers = append([]byte(nil), p.Data...)
+		}
+		snapshot := cloneWindow(b.Inventory.window)
+		b.Inventory.mu.Unlock()
+		b.Inventory.onWindow.emit(WindowChange{Window: snapshot})
 	case packet_ids.S2COpenScreenID:
 		var p packets.S2COpenScreen
 		if err := w.ReadInto(&p); err != nil {
 			return err
 		}
 		b.Inventory.mu.Lock()
-		b.Inventory.window = WindowSnapshot{ID: int32(p.WindowId), Type: int32(p.WindowType), Title: p.WindowTitle.Render(lang.Translate)}
+		b.Inventory.window = WindowSnapshot{ID: int32(p.WindowId), Type: int32(p.WindowType), Title: p.WindowTitle.Render(lang.Translate), Properties: make(map[int16]int16)}
 		snapshot := cloneWindow(b.Inventory.window)
 		b.Inventory.mu.Unlock()
 		b.Inventory.onWindow.emit(WindowChange{Window: snapshot})
@@ -162,6 +189,84 @@ func (b *Bot) handlePlay(w *jp.WirePacket) error {
 		b.Inventory.selected = int(p.Slot)
 		b.Inventory.mu.Unlock()
 		b.Self.update(func(s *SelfState) { s.SelectedSlot = int(p.Slot) })
+	case packet_ids.S2CPlayerAbilitiesID:
+		var p packets.S2CPlayerAbilities
+		if err := w.ReadInto(&p); err != nil {
+			return err
+		}
+		b.Self.update(func(s *SelfState) {
+			s.Flying = int8(p.Flags)&2 != 0
+			s.CanFly = int8(p.Flags)&4 != 0
+			s.FlyingSpeed = float32(p.FlyingSpeed)
+		})
+	case packet_ids.S2CSetPassengersID:
+		var p packets.S2CSetPassengers
+		if err := w.ReadInto(&p); err != nil {
+			return err
+		}
+		buf := ns.NewReader(p.Passengers)
+		count, err := buf.ReadVarInt()
+		if err != nil {
+			return err
+		}
+		selfID, aboard := b.Self.State().EntityID, false
+		for index := int32(0); index < int32(count); index++ {
+			id, err := buf.ReadVarInt()
+			if err != nil {
+				return err
+			}
+			if int32(id) == selfID {
+				aboard = true
+			}
+		}
+		b.Self.update(func(s *SelfState) {
+			if aboard {
+				s.VehicleID = int32(p.EntityId)
+			} else if s.VehicleID == int32(p.EntityId) {
+				s.VehicleID = 0
+			}
+		})
+	case packet_ids.S2CDamageEventID:
+		var p packets.S2CDamageEvent
+		if err := w.ReadInto(&p); err != nil {
+			return err
+		}
+		b.Combat.onEvent.emit(CombatEvent{Kind: "damage", EntityID: int32(p.EntityId), SourceID: int32(p.SourceCauseId)})
+	case packet_ids.S2CLevelParticlesID:
+		// Particle-specific trailing data is not length-prefixed, so decode the
+		// stable header here instead of using the generated opaque tail.
+		buf := ns.NewReader(w.Data)
+		if _, err := buf.ReadBool(); err != nil {
+			return err
+		}
+		if _, err := buf.ReadBool(); err != nil {
+			return err
+		}
+		x, err := buf.ReadFloat64()
+		if err != nil {
+			return err
+		}
+		y, err := buf.ReadFloat64()
+		if err != nil {
+			return err
+		}
+		z, err := buf.ReadFloat64()
+		if err != nil {
+			return err
+		}
+		for index := 0; index < 4; index++ {
+			if _, err := buf.ReadFloat32(); err != nil {
+				return err
+			}
+		}
+		if _, err := buf.ReadInt32(); err != nil {
+			return err
+		}
+		id, err := buf.ReadVarInt()
+		if err != nil {
+			return err
+		}
+		b.Special.onParticle.emit(particleEvent{Position: Vec3{X: float64(x), Y: float64(y), Z: float64(z)}, ID: int32(id)})
 	case packet_ids.S2CPlayerInfoUpdateID:
 		// This packet's action-bitset shape is not expressible by the generic
 		// packet generator, so the stable Players service decodes its payload.

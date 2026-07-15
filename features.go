@@ -17,4 +17,8 @@ const (
 	FeatureBuilding        = version.FeatureBuilding
 	FeatureCrafting        = version.FeatureCrafting
 	FeatureElytra          = version.FeatureElytra
+	FeatureInteractions    = version.FeatureInteractions
+	FeatureCombat          = version.FeatureCombat
+	FeatureContainers      = version.FeatureContainers
+	FeatureRiding          = version.FeatureRiding
 )

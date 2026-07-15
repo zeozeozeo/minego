@@ -57,14 +57,14 @@ advertise a pack until its packet schema and normalized adapters have tests.
 | dig block and select tool | `Miner.Dig` | Partial | Reach, sight, timing, authoritative update; full enchant/effect timing pending |
 | find and mine blocks | `Miner.Mine`, `Blocks`, `Tags` | Partial | Loaded search and frontier exploration; pickup and blacklisting pending |
 | place block | `Builder.Place` | Partial | Hotbar, support, sight, update; orientation/scaffolding pending |
-| use/activate item, block, entity | — | Planned | Packet primitives exist but no stable service API |
-| attack/combat | — | Planned | No combat service yet |
-| equip, toss, transfer, click window | — | Planned | Requires transaction/state-ID layer |
+| use/activate item, block, entity | `Interaction.UseItem`, `ReleaseItem`, `ActivateBlock`, `ActivateEntity`, `Swing` | Implemented | Coordinated view/hands, reach validation, sequence IDs, both hands and relative entity hits tested |
+| attack/combat | `Combat.Attack`, `Fight`, `OnEvent` | Implemented | Reach/view validation, cooldown loop, swing control and normalized damage events |
+| equip, toss, transfer, click window | `Inventory.Equip`, `Toss`, `Transfer`, `Click`, `CreativeSet` | Implemented | State-ID clicks wait for authoritative updates; equipment, partial counts, quick move, drop and creative slots covered |
 | crafting and recipes | `Crafter.RecipesFor`, `Craft`, `RegisterRecipe` | Partial | Generated vanilla shaped/shapeless recipes, recursive dependencies, 2x2/3x3 windows; custom server recipes and processing stations pending |
-| containers and furnaces | — | Planned | Requires authoritative windows |
-| enchanting, anvils, villagers | — | Planned | Requires authoritative windows |
-| beds, fishing, books, signs | — | Planned | No high-level API yet |
-| mount/dismount and creative flight | — | Planned | No high-level API yet |
+| containers and furnaces | `Containers.Open`, `Container`, furnace helpers | Implemented | Window lifecycle, slots, carried item, properties, close, fuel/input/output and stale-handle checks |
+| enchanting, anvils, villagers | `ChooseEnchantment`, `Rename`, `OpenEntity`, `SelectTrade` | Implemented | Button/rename/trade packets, authoritative window operations and immutable offer snapshots |
+| beds, fishing, books, signs | `Special.Sleep`, `Wake`, `Fish`, `EditBook`, `UpdateSign` | Implemented | Separate cast/reel control, book/sign bounds and signing, bed enter/leave actions |
+| mount/dismount and creative flight | `Riding.Mount`, `Dismount`, `MoveVehicle`, `Paddle`, `SetCreativeFlight`, `FlyTo` | Implemented | Authoritative passenger/ability state, vehicle movement and creative-mode validation |
 
 ## Navigation and automation
 

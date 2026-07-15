@@ -109,6 +109,27 @@ a safe landing near a standard block goal. `Builder.FindSite`,
 The `examples/wood-house` program mines any log family, crafts matching
 materials using both grid sizes, finds a clear site, and builds a 7x7 house.
 
+## Actions, combat, and containers
+
+`Bot.Interaction` exposes main/off-hand item use, release, arm swing, and
+reach-aware block/entity activation. `Bot.Combat` provides single attacks,
+cooldown-controlled fights, and normalized damage events:
+
+```go
+err := bot.Combat.Attack(ctx, zombieID,
+    minego.AttackOptions{Reach: 3, Swing: true})
+```
+
+`Bot.Inventory` provides authoritative state-ID clicks, transfers, equipment,
+dropping, and creative-slot updates. `Bot.Containers` opens block or entity
+windows and returns stale-safe handles with furnace, enchanting, anvil, and
+villager helpers. Window snapshots include immutable properties and merchant
+offer payloads.
+
+`Bot.Special` covers beds, fishing rods, writable books, and signs.
+`Bot.Riding` tracks server passenger and ability state and provides mounting,
+dismounting, vehicle/boat controls, and creative flight.
+
 ## Version packs and generation
 
 `version.Pack` isolates protocol IDs, packet factories, registries, block states,
@@ -136,8 +157,8 @@ used. See `docs/adding-a-version.md` for packet-schema changes.
 ## Current scope
 
 The committed [Mineflayer parity matrix](docs/mineflayer-parity.md) is the
-feature-completeness checklist. The inventory API covers player and crafting
-window synchronization, held-slot selection, crafting transactions,
-mining-tool choice, and hotbar block placement. General container transfers,
-furnace processing, custom server recipe discovery, Bedrock, Realms discovery,
-proxies, and server hosting are not part of this release.
+feature-completeness checklist. The inventory API covers player, crafting, and
+general container synchronization, held-slot selection, state-ID transactions,
+equipment, furnaces, workstation actions, mining-tool choice, and hotbar block
+placement. Custom server recipe discovery, Bedrock, Realms discovery, proxies,
+and server hosting are not part of this release.

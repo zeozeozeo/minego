@@ -1573,7 +1573,7 @@ func (p *S2CLevelParticles) Read(buf *ns.PacketBuffer) error {
 	if p.ParticleId, err = buf.ReadVarInt(); err != nil {
 		return err
 	}
-	p.Data, err = buf.ReadByteArray(1048576)
+	p.Data, err = buf.ReadRemaining()
 	return err
 }
 
@@ -1611,7 +1611,7 @@ func (p *S2CLevelParticles) Write(buf *ns.PacketBuffer) error {
 	if err := buf.WriteVarInt(p.ParticleId); err != nil {
 		return err
 	}
-	return buf.WriteByteArray(p.Data)
+	return buf.WriteFixedByteArray(p.Data)
 }
 
 // S2CLightUpdate represents "Update Light".
@@ -1847,7 +1847,7 @@ func (p *S2CMerchantOffers) Read(buf *ns.PacketBuffer) error {
 	if p.WindowId, err = buf.ReadVarInt(); err != nil {
 		return err
 	}
-	p.Data, err = buf.ReadByteArray(1048576)
+	p.Data, err = buf.ReadRemaining()
 	return err
 }
 
@@ -1855,7 +1855,7 @@ func (p *S2CMerchantOffers) Write(buf *ns.PacketBuffer) error {
 	if err := buf.WriteVarInt(p.WindowId); err != nil {
 		return err
 	}
-	return buf.WriteByteArray(p.Data)
+	return buf.WriteFixedByteArray(p.Data)
 }
 
 // S2CMoveEntityPos represents "Update Entity Position".

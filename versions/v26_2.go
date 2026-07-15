@@ -20,6 +20,7 @@ func (v26_2) Descriptor() version.Descriptor {
 		version.FeatureRuntimeRegistry, version.FeatureWorld, version.FeatureInventory,
 		version.FeatureNavigation, version.FeatureMining, version.FeatureBuilding,
 		version.FeatureCrafting, version.FeatureElytra,
+		version.FeatureInteractions, version.FeatureCombat, version.FeatureContainers, version.FeatureRiding,
 	)
 }
 func (v26_2) Name() string    { return "26.2" }

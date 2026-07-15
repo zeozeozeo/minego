@@ -51,6 +51,11 @@ type Bot struct {
 	Builder       *Builder
 	Crafter       *Crafter
 	Elytra        *Elytra
+	Interaction   *Interaction
+	Combat        *Combat
+	Containers    *Containers
+	Special       *SpecialInteractions
+	Riding        *Riding
 	Observability *Observability
 
 	onDisconnect event[DisconnectEvent]
@@ -108,6 +113,11 @@ func New(cfg Config) (*Bot, error) {
 	b.Builder = newBuilder(b)
 	b.Crafter = newCrafter(b)
 	b.Elytra = newElytra(b)
+	b.Interaction = newInteraction(b)
+	b.Combat = newCombat(b)
+	b.Containers = newContainers(b)
+	b.Special = newSpecialInteractions(b)
+	b.Riding = newRiding(b)
 	b.Observability = newObservability(b)
 	for _, plugin := range cfg.Plugins {
 		if plugin == nil {
@@ -134,6 +144,7 @@ func (b *Bot) Version() version.Descriptor {
 	return b.pack.Descriptor()
 }
 func (b *Bot) Supports(feature version.Feature) bool { return b.Version().Supports(feature) }
+func (b *Bot) nextSequence() int32                   { return atomic.AddInt32(&b.sequence, 1) }
 func (b *Bot) Require(feature version.Feature) error {
 	descriptor := b.Version()
 	if descriptor.Supports(feature) {
