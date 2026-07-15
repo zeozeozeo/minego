@@ -14,6 +14,9 @@ import (
 )
 
 func (b *Bot) handlePlay(w *jp.WirePacket) error {
+	if handled, err := b.handleLegacyObservation(w); handled {
+		return err
+	}
 	switch w.PacketID {
 	case packet_ids.S2CKeepAlivePlayID:
 		var p packets.S2CKeepAlivePlay
@@ -69,6 +72,74 @@ func (b *Bot) handlePlay(w *jp.WirePacket) error {
 			time.Clocks[i] = ClockState{ID: int32(clock.WorldClock), TotalTicks: int64(clock.TotalTicks), PartialTick: float32(clock.PartialTick), Rate: float32(clock.Rate)}
 		}
 		b.World.updateTime(time)
+	case packet_ids.S2CGameEventID:
+		return b.handleGameEvent(w)
+	case packet_ids.S2CTabListID:
+		var p packets.S2CTabList
+		if err := w.ReadInto(&p); err != nil {
+			return err
+		}
+		b.TabList.update(TabListState{Header: p.Header.Render(lang.Translate), Footer: p.Footer.Render(lang.Translate)})
+	case packet_ids.S2CBossEventID:
+		return b.handleBossBar(w)
+	case packet_ids.S2CSetObjectiveID:
+		return b.handleObjective(w.Data)
+	case packet_ids.S2CSetDisplayObjectiveID:
+		return b.handleDisplayObjective(w)
+	case packet_ids.S2CSetScoreID:
+		return b.handleScore(w.Data)
+	case packet_ids.S2CResetScoreID:
+		return b.handleResetScore(w)
+	case packet_ids.S2CSetPlayerTeamID:
+		return b.handleTeam(w.Data)
+	case packet_ids.S2CSoundID:
+		return b.handleSound(w.Data, false)
+	case packet_ids.S2CSoundEntityID:
+		return b.handleSound(w.Data, true)
+	case packet_ids.S2CExplodeID:
+		return b.handleExplosion(w.Data)
+	case packet_ids.S2CChangeDifficultyID:
+		var p packets.S2CChangeDifficulty
+		if err := w.ReadInto(&p); err != nil {
+			return err
+		}
+		b.Server.update(func(s *ServerState) {
+			s.Difficulty = uint8(p.Difficulty)
+			s.DifficultyLocked = bool(p.DifficultyLocked)
+		})
+	case packet_ids.S2CSetSimulationDistanceID:
+		var p packets.S2CSetSimulationDistance
+		if err := w.ReadInto(&p); err != nil {
+			return err
+		}
+		b.Server.update(func(s *ServerState) { s.SimulationDistance = int32(p.SimulationDistance) })
+	case packet_ids.S2CServerDataID:
+		var p packets.S2CServerData
+		if err := w.ReadInto(&p); err != nil {
+			return err
+		}
+		b.Server.update(func(s *ServerState) {
+			s.MOTD = p.Motd.Render(lang.Translate)
+			s.Icon = nil
+			if p.Icon.Present {
+				s.Icon = append([]byte(nil), p.Icon.Value...)
+			}
+		})
+	case packet_ids.S2CGameRuleValuesID:
+		if b.Version().Protocol >= 775 {
+			var p packets.S2CGameRuleValues
+			if err := w.ReadInto(&p); err != nil {
+				return err
+			}
+			b.Server.update(func(s *ServerState) {
+				if s.GameRules == nil {
+					s.GameRules = map[string]string{}
+				}
+				for _, v := range p.Values {
+					s.GameRules[string(v.Key)] = string(v.Value)
+				}
+			})
+		}
 	case packet_ids.S2CUpdateMobEffectID:
 		var p packets.S2CUpdateMobEffect
 		if err := w.ReadInto(&p); err != nil {
@@ -113,6 +184,7 @@ func (b *Bot) handlePlay(w *jp.WirePacket) error {
 		b.World.mu.Lock()
 		b.World.viewDistance = int32(p.ViewDistance)
 		b.World.mu.Unlock()
+		b.Server.update(func(s *ServerState) { s.ViewDistance = int32(p.ViewDistance) })
 	case packet_ids.S2CAddEntityID:
 		return b.handleAddEntity(w)
 	case packet_ids.S2CMoveEntityPosID:
@@ -233,40 +305,7 @@ func (b *Bot) handlePlay(w *jp.WirePacket) error {
 		}
 		b.Combat.onEvent.emit(CombatEvent{Kind: "damage", EntityID: int32(p.EntityId), SourceID: int32(p.SourceCauseId)})
 	case packet_ids.S2CLevelParticlesID:
-		// Particle-specific trailing data is not length-prefixed, so decode the
-		// stable header here instead of using the generated opaque tail.
-		buf := ns.NewReader(w.Data)
-		if _, err := buf.ReadBool(); err != nil {
-			return err
-		}
-		if _, err := buf.ReadBool(); err != nil {
-			return err
-		}
-		x, err := buf.ReadFloat64()
-		if err != nil {
-			return err
-		}
-		y, err := buf.ReadFloat64()
-		if err != nil {
-			return err
-		}
-		z, err := buf.ReadFloat64()
-		if err != nil {
-			return err
-		}
-		for index := 0; index < 4; index++ {
-			if _, err := buf.ReadFloat32(); err != nil {
-				return err
-			}
-		}
-		if _, err := buf.ReadInt32(); err != nil {
-			return err
-		}
-		id, err := buf.ReadVarInt()
-		if err != nil {
-			return err
-		}
-		b.Special.onParticle.emit(particleEvent{Position: Vec3{X: float64(x), Y: float64(y), Z: float64(z)}, ID: int32(id)})
+		return b.handleParticle(w.Data)
 	case packet_ids.S2CPlayerInfoUpdateID:
 		// This packet's action-bitset shape is not expressible by the generic
 		// packet generator, so the stable Players service decodes its payload.
@@ -306,6 +345,19 @@ func (b *Bot) handleJoin(w *jp.WirePacket) error {
 	}
 	b.World.reset(string(p.DimensionName))
 	b.Self.update(func(s *SelfState) { s.EntityID = int32(p.EntityId); s.GameMode = uint8(p.GameMode) })
+	b.Server.update(func(s *ServerState) {
+		s.Hardcore = bool(p.IsHardcore)
+		s.MaxPlayers = int32(p.MaxPlayers)
+		s.ViewDistance = int32(p.ViewDistance)
+		s.SimulationDistance = int32(p.SimulationDistance)
+		s.ReducedDebugInfo = bool(p.ReducedDebugInfo)
+		s.RespawnScreen = bool(p.EnableRespawnScreen)
+		s.LimitedCrafting = bool(p.DoLimitedCrafting)
+		s.Debug = bool(p.IsDebug)
+		s.Flat = bool(p.IsFlat)
+		s.OnlineMode = bool(p.OnlineMode)
+		s.EnforcesSecureChat = bool(p.EnforcesSecureChat)
+	})
 	return nil
 }
 func (b *Bot) handleRespawn(w *jp.WirePacket) error {

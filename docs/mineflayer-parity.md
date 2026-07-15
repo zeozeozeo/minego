@@ -44,10 +44,10 @@ advertise a pack until its packet schema and normalized adapters have tests.
 | inventory and held item | `Inventory.Slots`, `Window`, `Selected`, `Select` | Partial | Player/crafting windows and component snapshots; general container transfers pending |
 | chat/system messages | `Chat.OnMessage`, `Send`, `Command` | Partial | Signing supported; patterns, whispers, await, titles, completion pending |
 | time | `World.Time`, `World.OnTime` | Implemented | Immutable world-clock snapshots from `S2CSetTime` |
-| weather, tab list | — | Planned | No public service yet |
-| scoreboards, teams, boss bars | — | Planned | No public service yet |
-| sounds, particles, explosions | — | Planned | No public event yet |
-| server settings/game rules | — | Planned | No public snapshot yet |
+| weather, tab list | `Weather.State`, `TabList.State`, `OnChange` | Implemented | Immutable rain/thunder and rendered header/footer snapshots with normalized change events |
+| scoreboards, teams, boss bars | `Scoreboards`, `Teams`, `BossBars` | Implemented | Authoritative add/update/remove reducers, display slots, scores and immutable collection snapshots |
+| sounds, particles, explosions | `WorldEffects.OnSound`, `OnParticle`, `OnExplosion` | Implemented | Normalized spatial events retain registry IDs and immutable version-owned payload tails |
+| server settings/game rules | `Server.State`, `OnChange` | Implemented | Join settings, difficulty, distances, MOTD/icon and immutable game-rule snapshots |
 
 ## Actions and interactions
 
@@ -84,9 +84,9 @@ advertise a pack until its packet schema and normalized adapters have tests.
 ## Event semantics
 
 Subscriptions currently return idempotent unsubscribe functions and copy their
-handler list before delivery. Implemented normalized events are disconnect, raw
-packet, chat message, block change, chunk load, entity change, navigation
-progress, and mining progress. Mineflayer event headings not represented above
-(window lifecycle, physics tick, health/death, weather/time, player list,
-scoreboard/team/boss bar, sound/particle/explosion, title/action bar, resource
-pack, and specialized interaction events) remain planned.
+handler list before delivery. Implemented normalized events include disconnect,
+raw packet, chat message, block/chunk/entity/player changes, time/weather/tab
+state, scoreboard/team/boss-bar changes, sound/particle/explosion observations,
+server settings, window state, navigation/mining progress, and interaction
+events. Physics ticks, richer health/death events, title/action bar, resource
+pack lifecycle, and some specialized interaction events remain planned.

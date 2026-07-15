@@ -6,19 +6,20 @@ type Feature = version.Feature
 type Version = version.Descriptor
 
 const (
-	FeatureStatus          = version.FeatureStatus
-	FeatureConfiguration   = version.FeatureConfiguration
-	FeatureSignedChat      = version.FeatureSignedChat
-	FeatureRuntimeRegistry = version.FeatureRuntimeRegistry
-	FeatureWorld           = version.FeatureWorld
-	FeatureInventory       = version.FeatureInventory
-	FeatureNavigation      = version.FeatureNavigation
-	FeatureMining          = version.FeatureMining
-	FeatureBuilding        = version.FeatureBuilding
-	FeatureCrafting        = version.FeatureCrafting
-	FeatureElytra          = version.FeatureElytra
-	FeatureInteractions    = version.FeatureInteractions
-	FeatureCombat          = version.FeatureCombat
-	FeatureContainers      = version.FeatureContainers
-	FeatureRiding          = version.FeatureRiding
+	FeatureStatus           = version.FeatureStatus
+	FeatureConfiguration    = version.FeatureConfiguration
+	FeatureSignedChat       = version.FeatureSignedChat
+	FeatureRuntimeRegistry  = version.FeatureRuntimeRegistry
+	FeatureWorld            = version.FeatureWorld
+	FeatureInventory        = version.FeatureInventory
+	FeatureNavigation       = version.FeatureNavigation
+	FeatureMining           = version.FeatureMining
+	FeatureBuilding         = version.FeatureBuilding
+	FeatureCrafting         = version.FeatureCrafting
+	FeatureElytra           = version.FeatureElytra
+	FeatureInteractions     = version.FeatureInteractions
+	FeatureCombat           = version.FeatureCombat
+	FeatureContainers       = version.FeatureContainers
+	FeatureRiding           = version.FeatureRiding
+	FeatureStateObservation = version.FeatureStateObservation
 )

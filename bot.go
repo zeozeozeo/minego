@@ -57,6 +57,13 @@ type Bot struct {
 	Special       *SpecialInteractions
 	Riding        *Riding
 	Observability *Observability
+	Weather       *Weather
+	TabList       *TabList
+	Scoreboards   *Scoreboards
+	Teams         *Teams
+	BossBars      *BossBars
+	Effects       *WorldEffects
+	Server        *Server
 
 	onDisconnect event[DisconnectEvent]
 	onPacket     event[RawPacket]
@@ -119,6 +126,13 @@ func New(cfg Config) (*Bot, error) {
 	b.Special = newSpecialInteractions(b)
 	b.Riding = newRiding(b)
 	b.Observability = newObservability(b)
+	b.Weather = newWeather()
+	b.TabList = newTabList()
+	b.Scoreboards = newScoreboards()
+	b.Teams = newTeams()
+	b.BossBars = newBossBars()
+	b.Effects = newWorldEffects()
+	b.Server = newServer()
 	for _, plugin := range cfg.Plugins {
 		if plugin == nil {
 			return nil, errors.New("minego: nil plugin")

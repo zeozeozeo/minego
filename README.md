@@ -130,6 +130,27 @@ offer payloads.
 `Bot.Riding` tracks server passenger and ability state and provides mounting,
 dismounting, vehicle/boat controls, and creative flight.
 
+## State and observation
+
+`Bot.Weather`, `Bot.TabList`, and `Bot.Server` expose concurrency-safe immutable
+snapshots and change subscriptions. `Bot.Scoreboards`, `Bot.Teams`, and
+`Bot.BossBars` reduce the corresponding add, update, and remove packets into
+queryable state. Transient spatial observations are available through
+`Bot.Effects`:
+
+```go
+unsubscribe := bot.Effects.OnSound(func(sound minego.SoundEvent) {
+    // sound.Position, sound.ID, sound.Name, sound.Volume, ...
+})
+defer unsubscribe()
+
+weather := bot.Weather.State()
+rules := bot.Server.State().GameRules
+```
+
+Registry-specific packet tails are copied into immutable `Data` fields when
+their exact schema belongs to the selected version pack.
+
 ## Version packs and generation
 
 `version.Pack` isolates protocol IDs, packet factories, registries, block states,
